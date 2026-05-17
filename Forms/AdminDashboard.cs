@@ -1232,7 +1232,7 @@ namespace OptiRoute.Forms
             path.CloseFigure();
             return path;
         }
-
+         
         private static StringFormat Centre() =>
             new StringFormat
             {

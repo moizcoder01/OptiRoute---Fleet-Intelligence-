@@ -251,7 +251,7 @@ namespace OptiRoute.Forms
 
             try
             {
-                // ── 1. TEXTBOX SE INPUT UTHANA ─────────────────────────
+                // ── 1. TEXTBOX SE INPUT ─────────────────────────
                 string username = txtUsername.Text.Trim();
                 string passwordInput = txtPassword.Text;
 
@@ -262,7 +262,7 @@ namespace OptiRoute.Forms
                 // ── 2. HARDCODED ADMIN BYPASS ──────────────────────────
                 if (username == "admin" && passwordInput == "Admin@123")
                 {
-                    isValid = true;
+                    isValid = true; 
                     userRole = "Admin"; 
                 }
                 else
