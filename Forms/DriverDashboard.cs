@@ -1432,6 +1432,6 @@ namespace OptiRoute.Forms
         {
             int len = Math.Min(a.Length, b.Length);
             for (int i = 0; i < len; i++) yield return (a[i], b[i]);
-        }
+        } 
     }
 }

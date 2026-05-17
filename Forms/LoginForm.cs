@@ -428,7 +428,7 @@ namespace OptiRoute.Forms
             g.FillEllipse(c1, 320, 380, 300, 300);
 
             using var c2 = new SolidBrush(Color.FromArgb(12, 255, 255, 255));
-            g.FillEllipse(c2, -80, -80, 280, 280);
+            g.FillEllipse(c2, -80, -80, 280, 280); 
 
             using var dot = new SolidBrush(Color.FromArgb(28, 255, 255, 255));
             for (int row = 0; row < 5; row++)
