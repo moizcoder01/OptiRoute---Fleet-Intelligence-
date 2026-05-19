@@ -157,6 +157,7 @@ namespace OptiRoute.Forms
                 // Resize every page panel to match mainPanel so content fills the screen
                 foreach (Control c in mainPanel.Controls)
                     if (c is Panel pg) pg.Size = mainPanel.Size;
+                RefreshDashboard();
                 sidePanel.Invalidate();
                 headerPanel.Invalidate();
             };
@@ -274,7 +275,7 @@ namespace OptiRoute.Forms
             {
                 if (MessageBox.Show("Are you sure you want to logout?", "Logout",
                     MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
-                { new Form1().Show(); Close(); }
+                { new LoginForm().Show(); Close(); }
             };
             sidePanel.Controls.Add(btnLogout);
 
@@ -502,20 +503,14 @@ namespace OptiRoute.Forms
             int[] wids = { 65, 110, 75, 85, 120, 120, 100, 90, 110, 100 };
             DrawTableHeader(tblCard, hdrs, wids, 16);
 
-            List<Order> orders = _orderRepo.GetAllPending();
-
-            if (statusFilter != "Pending" && statusFilter != "All")
-            {
-                tblCard.Controls.Add(L($"Showing {statusFilter} orders — select 'All' or 'Pending' to see data.",
-                    new Font("Segoe UI", 10f), TextGray, new Point(20, 60)));
-                return;
-            }
+            // Fetch correct set based on filter
+            List<Order> orders = statusFilter == "All"
+                ? _orderRepo.GetAllOrders()
+                : _orderRepo.GetByStatus(statusFilter);
 
             int rowY = 56; bool alt = false;
             foreach (Order o in orders)
             {
-                if (statusFilter != "All" && o.OrderStatus != statusFilter) continue;
-
                 string[] row =
                 {
                     "#" + o.OrderID, o.ItemName, o.WeightDisplay, o.Priority,
@@ -1232,7 +1227,7 @@ namespace OptiRoute.Forms
             path.CloseFigure();
             return path;
         }
-         
+
         private static StringFormat Centre() =>
             new StringFormat
             {
@@ -1245,5 +1240,5 @@ namespace OptiRoute.Forms
             int len = Math.Min(a.Length, b.Length);
             for (int i = 0; i < len; i++) yield return (a[i], b[i]);
         }
-    } 
+    }
 }

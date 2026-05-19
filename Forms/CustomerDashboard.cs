@@ -9,9 +9,6 @@
 //       RefreshMyOrders() called on every sidebar click.
 //    4. My Profile: full profile card + photo upload + change password.
 //    5. Profile photo stored as path — loaded from disk each time.
-//    6. Recent Orders table: Date column now fills remaining width
-//       dynamically (same approach as Admin "Pending Orders" table)
-//       so no column is ever cut off on screen.
 //
 //  ARCHITECTURE : Zero SQL in this file.
 //  THEME        : 100% preserved — same colours, fonts, cards.
@@ -107,7 +104,6 @@ namespace OptiRoute.Forms
             Font = new Font("Segoe UI", 9f);
 
             BuildLayout();
-
             Load += (s, e) => { RefreshDashboard(); ShowPanel(pnlDashboard, btnDashboard); };
             ShowPanel(pnlDashboard, btnDashboard);
         }
@@ -161,9 +157,9 @@ namespace OptiRoute.Forms
                 sidePanel.Size = new Size(188, ClientSize.Height);
                 headerPanel.Size = new Size(ClientSize.Width - 188, 56);
                 mainPanel.Size = new Size(ClientSize.Width - 188, ClientSize.Height - 56);
-                // Resize every page panel to match mainPanel so content fills the screen
                 foreach (Control c in mainPanel.Controls)
                     if (c is Panel pg) pg.Size = mainPanel.Size;
+                RefreshDashboard();
                 sidePanel.Invalidate();
                 headerPanel.Invalidate();
             };
@@ -377,10 +373,6 @@ namespace OptiRoute.Forms
 
         // ═════════════════════════════════════════════════════════
         //  PAGE 1 — DASHBOARD
-        //  BuildDashboardPanel: empty shell only — content built in
-        //  RefreshDashboard() which is called on Load (after maximise)
-        //  so mainPanel.Width is the real screen width, not the
-        //  constructor minimum. Matches exactly how Admin does it.
         // ═════════════════════════════════════════════════════════
         private void BuildDashboardPanel()
         {
@@ -389,20 +381,17 @@ namespace OptiRoute.Forms
 
         private void RefreshDashboard()
         {
-            // Ensure pnlDashboard matches mainPanel's current (maximised) size
-            pnlDashboard.Size = mainPanel.Size;
-
-            // Clear old content and rebuild with the real (maximised) width
             pnlDashboard.Controls.Clear();
 
-            int W = mainPanel.Width; // real width after form is maximised
+            int W = mainPanel.Width; // real width after maximized
 
             // ── Welcome banner ────────────────────────────────────
             var banner = new Panel
             {
-                Location = new Point(20, 14),
-                Size = new Size(W - 40, 76),
-                BackColor = Color.Transparent
+                Location = new Point(30, 22),
+                Size = new Size(W - 60, 96),
+                BackColor = Color.Transparent,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
             banner.Paint += (s, e) =>
             {
@@ -419,46 +408,43 @@ namespace OptiRoute.Forms
                 new Font("Segoe UI", 10f), Color.FromArgb(200, 235, 255), new Point(22, 44)));
             pnlDashboard.Controls.Add(banner);
 
-            // ── Stat cards ────────────────────────────────────────
+            // ── Stat cards — sized to fill the full screen width ──
             var summary = _orderRepo.GetSummary(_customer.UserID);
-            int cW = 200, cH = 110, cTop = 104, cGap = 14;
+            int cGap = 16;
+            int cW = (W - 60 - 3 * cGap) / 4;
+            int cH = 130, cTop = 138;
 
-            BuildStatCard(pnlDashboard, 20, cTop, "📦", "Total Orders",
+            BuildStatCard(pnlDashboard, 30, cTop, "📦", "Total Orders",
                 summary.Total.ToString(), RoyalBlue, cW, cH);
-            BuildStatCard(pnlDashboard, 20 + (cW + cGap), cTop, "🚚", "In Transit",
+            BuildStatCard(pnlDashboard, 30 + (cW + cGap), cTop, "🚚", "In Transit",
                 summary.InTransit.ToString(), OrangeWarn, cW, cH);
-            BuildStatCard(pnlDashboard, 20 + (cW + cGap) * 2, cTop, "✅", "Delivered",
+            BuildStatCard(pnlDashboard, 30 + (cW + cGap) * 2, cTop, "✅", "Delivered",
                 summary.Delivered.ToString(), GreenOk, cW, cH);
-            BuildStatCard(pnlDashboard, 20 + (cW + cGap) * 3, cTop, "⚡", "Urgent",
+            BuildStatCard(pnlDashboard, 30 + (cW + cGap) * 3, cTop, "⚡", "Urgent",
                 summary.Urgent.ToString(), RedAlert, cW, cH);
 
-            // ── Recent orders table ───────────────────────────────
-            // tblW is the real available width — Date column gets the
-            // remaining space so nothing is clipped on the right.
-            int tblTop = cTop + cH + 14;
-            int tblH = pnlDashboard.Height - tblTop - 14;
-            if (tblH < 180) tblH = 180;
+            // ── Recent orders table — full width, Date column fills remaining space ──
+            int tblW = W - 60;
+            int tblTop = 292;
+            int tblH = 420;
 
-            int tblW = W - 40; // full available width (matches Admin pattern)
-            var tbl = Card(20, tblTop, tblW, tblH);
+            var tbl = Card(30, tblTop, tblW, tblH);
+            tbl.Anchor = AnchorStyles.Top | AnchorStyles.Left |
+                         AnchorStyles.Right | AnchorStyles.Bottom;
             pnlDashboard.Controls.Add(tbl);
 
             tbl.Controls.Add(L("📋  Recent Orders",
-                new Font("Segoe UI", 12, FontStyle.Bold), TextDark, new Point(16, 12)));
-
+                new Font("Segoe UI", 13, FontStyle.Bold), TextDark, new Point(20, 16)));
             tbl.Controls.Add(L("📦  All Recent Orders",
-                new Font("Segoe UI", 10f, FontStyle.Bold), TextGray, new Point(16, 40)));
+                new Font("Segoe UI", 10f, FontStyle.Bold), TextGray, new Point(20, 46)));
 
-            // Columns: Order ID, Item, Weight, Priority, Pick-up, Delivery, Status, Date
-            // Fixed widths for first 7 columns; Date fills the remainder — same as Admin.
             string[] hdrs = { "Order ID", "Item", "Weight", "Priority",
                                "Pick-up", "Delivery", "Status", "Date" };
-            int fixedCols = 80 + 130 + 75 + 90 + 140 + 150 + 110; // sum of first 7 cols
-            int dateW = tblW - 32 - fixedCols; // tblW minus left(16)+right(16) padding
-            if (dateW < 90) dateW = 90;
-            int[] wids = { 80, 130, 75, 90, 140, 150, 110, dateW };
+            int fixedCols = 80 + 130 + 75 + 90 + 140 + 150 + 110;
+            int dateColW = tblW - 32 - fixedCols;
+            if (dateColW < 110) dateColW = 110;
+            int[] wids = { 80, 130, 75, 90, 140, 150, 110, dateColW };
 
-            // Draw header row
             int hx = 16;
             foreach (var (h, w) in Zip(hdrs, wids))
             {
@@ -476,7 +462,6 @@ namespace OptiRoute.Forms
                 hx += w;
             }
 
-            // Draw data rows
             int rowY = 92; bool alt = false;
             List<Order> recent = _orderRepo.GetRecentByCustomer(_customer.UserID, 8);
 
@@ -517,7 +502,7 @@ namespace OptiRoute.Forms
                     });
                     rx += w;
                 }
-                rowY += 32;
+                rowY += 38;
                 if (rowY > tblH - 20) break;
             }
         }
@@ -1563,4 +1548,4 @@ namespace OptiRoute.Forms
             for (int i = 0; i < len; i++) yield return (a[i], b[i]);
         }
     }
-}  
+}

@@ -13,6 +13,15 @@
 //      info block + Change Password card (fully visible).
 //   5. Change Password uses UserRepository.UpdatePassword().
 //
+//  NEW CHANGES (3 only — nothing else touched):
+//   A. Stat card height increased 128 → 148 so value text is
+//      fully visible with no bottom clipping.
+//   B. Fuel level progress bar moved slightly lower (y 114→126)
+//      so it sits clearly below the "Fuel Level:" label.
+//   C. Rating value (5.0/5.0) and stars are greyed out when the
+//      driver has 0 delivered orders / 0 ratings. Once a rating
+//      exists the original OrangeWarn / Gold colours are shown.
+//
 //  THEME / STYLE : Unchanged from original.
 //  PROFILE PHOTO : Loaded from path at runtime — NOT stored in DB.
 // =============================================================
@@ -398,15 +407,17 @@ namespace OptiRoute.Forms
                 new Font("Segoe UI", 10f), Color.FromArgb(255, 230, 180), new Point(24, 48)));
             pnlDashboard.Controls.Add(banner);
 
-            // ── Stat cards — FIX: title at y=70, value at y=94 ──
+            // ── Stat cards ──────────────────────────────────────
+            // CHANGE A: cH increased from 128 → 148 so the value
+            // number at y=90 is fully visible with no bottom clipping.
             var stats = _driverRepo.GetDriverStats(_driver.UserID);
-            int cW = 248, cH = 128, cTop = 114, gap = 16;
+            int cW = 248, cH = 148, cTop = 114, gap = 16;
             StatCard(pnlDashboard, mLeft, cTop, "📋", "Assigned", stats.Assigned.ToString(), RoyalBlue, cW, cH);
             StatCard(pnlDashboard, mLeft + (cW + gap), cTop, "✅", "Delivered", stats.Delivered.ToString(), GreenOk, cW, cH);
             StatCard(pnlDashboard, mLeft + (cW + gap) * 2, cTop, "⏳", "Pending Pickup", stats.Pending.ToString(), OrangeWarn, cW, cH);
             StatCard(pnlDashboard, mLeft + (cW + gap) * 3, cTop, "↩️", "Returned", stats.Returned.ToString(), RedAlert, cW, cH);
 
-            // ── Vehicle & Fuel card ──
+            // ── Vehicle & Fuel card ──────────────────────────────
             int row2Y = cTop + cH + 16;
             var vCard = Card(mLeft, row2Y, 490, 152);
             pnlDashboard.Controls.Add(vCard);
@@ -420,28 +431,45 @@ namespace OptiRoute.Forms
 
             double fuel = Math.Min(100, Math.Max(0, _driver.CurrentFuel));
             Color fuelColor = fuel > 60 ? GreenOk : fuel > 25 ? OrangeWarn : RedAlert;
-            var fuelTrack = new Panel { Location = new Point(20, 114), Size = new Size(430, 14), BackColor = Color.FromArgb(220, 228, 245) };
+
+            // CHANGE B: fuelTrack moved from y=114 → y=126 so the
+            // green bar sits clearly below the "Fuel Level:" label text.
+            var fuelTrack = new Panel { Location = new Point(20, 126), Size = new Size(430, 14), BackColor = Color.FromArgb(220, 228, 245) };
             fuelTrack.Paint += (s, e) => { e.Graphics.SmoothingMode = SmoothingMode.AntiAlias; fuelTrack.Region = new Region(RndPath(fuelTrack.ClientRectangle, 7)); };
             var fuelFill = new Panel { Location = new Point(0, 0), Size = new Size((int)(430 * fuel / 100.0), 14), BackColor = fuelColor };
             fuelFill.Paint += (s, e) => { if (fuelFill.Width > 7) { e.Graphics.SmoothingMode = SmoothingMode.AntiAlias; fuelFill.Region = new Region(RndPath(fuelFill.ClientRectangle, 7)); } };
             fuelTrack.Controls.Add(fuelFill);
             vCard.Controls.Add(fuelTrack);
-            vCard.Controls.Add(L(fuel + "%", new Font("Segoe UI", 9f, FontStyle.Bold), fuelColor, new Point(456, 111)));
+            // Percentage label aligned with bar (y=123 matches bar top)
+            vCard.Controls.Add(L(fuel + "%", new Font("Segoe UI", 9f, FontStyle.Bold), fuelColor, new Point(456, 123)));
 
-            // ── Rating card ──
+            // ── Rating card ──────────────────────────────────────
+            // CHANGE C: grey out rating value and stars when the driver
+            // has 0 total ratings (i.e. no delivered-and-rated orders).
+            // Once any rating exists, OrangeWarn / Gold colours are used.
             var rCard = Card(mLeft + 506, row2Y, 570, 152);
             pnlDashboard.Controls.Add(rCard);
             rCard.Controls.Add(new Panel { Location = new Point(0, 0), Size = new Size(570, 5), BackColor = Color.Gold });
             rCard.Controls.Add(L("⭐  My Rating & Performance", new Font("Segoe UI", 12, FontStyle.Bold), TextDark, new Point(20, 14)));
+
             double avg = _driver.AverageRating;
-            rCard.Controls.Add(L(avg.ToString("0.0") + " / 5.0", new Font("Segoe UI", 26, FontStyle.Bold), OrangeWarn, new Point(20, 42)));
+            bool hasRatings = stats.TotalRatings > 0;
+
+            // Rating value colour: OrangeWarn when rated, TextGray when not yet rated
+            Color ratingColor = hasRatings ? OrangeWarn : TextGray;
+            rCard.Controls.Add(L(avg.ToString("0.0") + " / 5.0", new Font("Segoe UI", 26, FontStyle.Bold), ratingColor, new Point(20, 42)));
+
             int fullS = (int)Math.Round(avg);
             string stars = new string('★', fullS) + new string('☆', 5 - fullS);
-            rCard.Controls.Add(L(stars, new Font("Segoe UI", 17), Color.Gold, new Point(20, 92)));
+
+            // Stars colour: Gold when rated, TextGray when not yet rated
+            Color starColor = hasRatings ? Color.Gold : TextGray;
+            rCard.Controls.Add(L(stars, new Font("Segoe UI", 17), starColor, new Point(20, 92)));
+
             rCard.Controls.Add(L("Based on " + stats.TotalRatings + " ratings", new Font("Segoe UI", 9.5f), TextGray, new Point(210, 50)));
             rCard.Controls.Add(L("Total delivered: " + stats.Delivered, new Font("Segoe UI", 9.5f), TextGray, new Point(210, 72)));
 
-            // ── Recent Assignments table ──
+            // ── Recent Assignments table ──────────────────────────
             int tblTop = row2Y + 152 + 14;
             int remainH = Math.Max(200, mainPanel.Height - tblTop - 14);
             var tbl = Card(mLeft, tblTop, mWidth, remainH);
@@ -934,7 +962,7 @@ namespace OptiRoute.Forms
         // ═════════════════════════════════════════════════════════
         //  PAGE 5 — MY PROFILE  (no scroll, all cards visible)
         //
-        //  Layout (matches Correct_one.jpeg):
+        //  Layout:
         //   Row 1 (top):  [Avatar + photo card]   [Account Info card]
         //   Row 2 (mid):  [Personal Info card (full width)]
         //   Row 3 (bot):  [Vehicle Details card]  [Change Password card]
@@ -962,7 +990,6 @@ namespace OptiRoute.Forms
             pnlProfile.Controls.Add(avatarCard);
             avatarCard.Controls.Add(new Panel { Location = new Point(0, 0), Size = new Size(avatarW, 5), BackColor = OrangeWarn });
 
-            // Avatar circle in profile page
             pnlProfileAvatar = new Panel
             {
                 Size = new Size(100, 100),
@@ -987,7 +1014,6 @@ namespace OptiRoute.Forms
             };
             avatarCard.Controls.Add(pnlProfileAvatar);
 
-            // Name / role next to avatar
             var lblPName = new Label
             {
                 Text = _driver.FullName,
@@ -1006,7 +1032,6 @@ namespace OptiRoute.Forms
             activeChip.Controls.Add(new Label { Text = "● Active Account", Font = new Font("Segoe UI", 9f, FontStyle.Bold), ForeColor = GreenOk, BackColor = Color.Transparent, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter });
             avatarCard.Controls.Add(activeChip);
 
-            // Upload button
             var btnUpload = new Button
             {
                 Text = "📷  Upload Photo",
@@ -1033,7 +1058,6 @@ namespace OptiRoute.Forms
                         _profilePhotoPath = dlg.FileName;
                         _profilePhoto?.Dispose();
                         _profilePhoto = Image.FromFile(_profilePhotoPath);
-                        // Refresh both avatar panels
                         pnlProfileAvatar.Invalidate();
                         picAvatar.Invalidate();
                     }
@@ -1180,25 +1204,20 @@ namespace OptiRoute.Forms
             vCard.Controls.Add(btnSaveV);
 
             // ────────────────────────────────────────────────────
-            //  ROW 3 RIGHT — Change Password card (FIXED LAYOUT)
+            //  ROW 3 RIGHT — Change Password card
             // ────────────────────────────────────────────────────
             var pwCard = Card(rightX, row3Y, pwCardW, row3H);
             pnlProfile.Controls.Add(pwCard);
 
-            // Top border line
             pwCard.Controls.Add(new Panel { Location = new Point(0, 0), Size = new Size(pwCardW, 5), BackColor = RoyalBlue });
 
-            // 1. Fixed Title (Increased X and AutoSize check)
             var lblTitle = L("🔒 Change Password", new Font("Segoe UI", 11, FontStyle.Bold), TextDark, new Point(22, 14));
             lblTitle.AutoSize = true;
             pwCard.Controls.Add(lblTitle);
 
-            // Define common spacing variables
-            int labelY = 50;     // Labels ki height
-            int inputY = 72;     // Textboxes ki height
-            int columnGap = 195; // Ek column se doosre ka distance (180 width + 15 gap)
+            int labelY = 50;
+            int inputY = 72;
 
-            // 2. Current Password
             var lblCur = L("Current Password", new Font("Segoe UI", 9f, FontStyle.Bold), TextGray, new Point(22, labelY));
             lblCur.AutoSize = true;
             pwCard.Controls.Add(lblCur);
@@ -1214,7 +1233,6 @@ namespace OptiRoute.Forms
             };
             pwCard.Controls.Add(txtCurPw);
 
-            // 3. New Password (X shifted to 212)
             var lblNew = L("New Password", new Font("Segoe UI", 9f, FontStyle.Bold), TextGray, new Point(212, labelY));
             lblNew.AutoSize = true;
             pwCard.Controls.Add(lblNew);
@@ -1230,7 +1248,6 @@ namespace OptiRoute.Forms
             };
             pwCard.Controls.Add(txtNewPw);
 
-            // 4. Confirm Password (X shifted to 402)
             var lblConf = L("Confirm Password", new Font("Segoe UI", 9f, FontStyle.Bold), TextGray, new Point(402, labelY));
             lblConf.AutoSize = true;
             pwCard.Controls.Add(lblConf);
@@ -1246,7 +1263,6 @@ namespace OptiRoute.Forms
             };
             pwCard.Controls.Add(txtConfPw);
 
-            // 5. Status Label (Shifted down slightly)
             var lblPwStatus = new Label
             {
                 Text = "",
@@ -1258,11 +1274,10 @@ namespace OptiRoute.Forms
             };
             pwCard.Controls.Add(lblPwStatus);
 
-            // 6. Update Button (Aligned with the right edge of the last textbox)
             var btnUpdate = new Button
             {
                 Text = "Update",
-                Location = new Point(469, 110), // Adjusted to align perfectly
+                Location = new Point(469, 110),
                 Size = new Size(108, 38),
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 10, FontStyle.Bold),
@@ -1332,51 +1347,30 @@ namespace OptiRoute.Forms
                 BackColor = PageBg,
                 Visible = false,
                 AutoScroll = autoScroll
-
             };
 
             if (autoScroll) p.AutoScrollMinSize = new Size(0, 1400);
 
             mainPanel.Controls.Add(p);
-
             return p;
-
         }
-
-
 
         private Panel Card(int x, int y, int w, int h)
-
         {
-
             var c = new Panel { Location = new Point(x, y), Size = new Size(w, h), BackColor = Color.White };
-
             c.Paint += (s, e) =>
-
             {
-
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-
                 using var path = RndPath(c.ClientRectangle, 12);
-
                 e.Graphics.FillPath(new SolidBrush(Color.White), path);
-
                 c.Region = new Region(path);
-
             };
-
             return c;
-
         }
 
-
-
         // FIX: title at y=70, value at y=94 — no collision with icon at y=18
-
         private void StatCard(Panel parent, int x, int y, string icon, string title, string value, Color accent, int w, int h)
-
         {
-
             var c = Card(x, y, w, h);
             c.Controls.Add(new Panel { Location = new Point(0, 0), Size = new Size(w, 5), BackColor = accent });
             c.Controls.Add(L(icon, new Font("Segoe UI", 22), accent, new Point(16, 16)));
@@ -1432,6 +1426,6 @@ namespace OptiRoute.Forms
         {
             int len = Math.Min(a.Length, b.Length);
             for (int i = 0; i < len; i++) yield return (a[i], b[i]);
-        } 
+        }
     }
-} 
+}

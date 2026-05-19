@@ -345,6 +345,60 @@ namespace OptiRoute.Core.Data
             return list;
         }
 
+        // ── ADMIN: ALL ORDERS (every status) ─────────────────────
+        public List<Order> GetAllOrders()
+        {
+            var list = new List<Order>();
+            try
+            {
+                using var conn = new SqlConnection(_cs);
+                conn.Open();
+                var cmd = new SqlCommand(
+                    @"SELECT o.OrderID, o.CustomerID,
+                             NULL AS DriverID,
+                             ISNULL(o.VehicleID, 0) AS VehicleID,
+                             o.ItemName, o.Weight, o.Priority,
+                             o.PickupPoint, o.DeliveryPoint, o.OrderStatus,
+                             o.TotalFare, o.PaymentStatus,
+                             ISNULL(o.Rating, 0) AS Rating, o.OrderDate
+                      FROM   Table_Orders o
+                      ORDER  BY o.OrderDate DESC", conn);
+
+                using var r = cmd.ExecuteReader();
+                while (r.Read()) list.Add(MapOrder(r));
+            }
+            catch { }
+            return list;
+        }
+
+        // ── ADMIN: ORDERS BY STATUS ───────────────────────────────
+        public List<Order> GetByStatus(string status)
+        {
+            var list = new List<Order>();
+            try
+            {
+                using var conn = new SqlConnection(_cs);
+                conn.Open();
+                var cmd = new SqlCommand(
+                    @"SELECT o.OrderID, o.CustomerID,
+                             NULL AS DriverID,
+                             ISNULL(o.VehicleID, 0) AS VehicleID,
+                             o.ItemName, o.Weight, o.Priority,
+                             o.PickupPoint, o.DeliveryPoint, o.OrderStatus,
+                             o.TotalFare, o.PaymentStatus,
+                             ISNULL(o.Rating, 0) AS Rating, o.OrderDate
+                      FROM   Table_Orders o
+                      WHERE  o.OrderStatus = @Status
+                      ORDER  BY o.OrderDate DESC", conn);
+                cmd.Parameters.AddWithValue("@Status", status);
+
+                using var r = cmd.ExecuteReader();
+                while (r.Read()) list.Add(MapOrder(r));
+            }
+            catch { }
+            return list;
+        }
+
         // ── ADMIN: REVENUE SUMMARY ────────────────────────────────
         // NOTE: Property is CodOrders (matches AdminDashboard usage)
         public (decimal TotalRevenue, int TotalOrders, int PaidOrders, int CodOrders)

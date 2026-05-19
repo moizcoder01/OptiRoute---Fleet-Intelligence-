@@ -51,9 +51,10 @@ namespace OptiRoute.Forms
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             Font = new Font("Segoe UI", 9f);
+            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;
             BuildLayout();
         }
-
+         
         // ─────────────────────────────────────────────────────────
         //  LAYOUT
         // ─────────────────────────────────────────────────────────

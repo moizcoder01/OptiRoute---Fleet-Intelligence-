@@ -1,62 +1,66 @@
-﻿// =============================================================
-//  OptiRoute  |  Forms/SignUpForm.cs
+// =============================================================
+//  OptiRoute  |  Forms/DriverVehicleForm.cs
 //
-//  Roles available in signup: Customer, Driver
+//  Step 2 of Driver registration.
+//  Called from SignUpForm after personal details are validated.
+//  Collects: License Number, Vehicle Plate Number, Vehicle Type.
+//  On success registers the driver + vehicle and opens LoginForm.
 //
-//  ┌─ WHY ADMIN IS NOT HERE ───────────────────────────────────┐
-//  │  Admin is a PRESET account created directly in the DB.    │
-//  │  Self-registration as Admin would be a security hole —    │
-//  │  anyone could grant themselves full system access.        │
-//  │  The Admin account is seeded in the SQL schema:           │
-//  │    Username : admin                                       │
-//  │    Password : Admin@123   (change after first login)      │
-//  │  Admin simply logs in — no signup needed.                 │
-//  └───────────────────────────────────────────────────────────┘
+//  Visual style: identical to SignUpForm (same gradient, same
+//  input field helper, same brand panel on the right).
 //
-//  Logo path : C:\Users\dell\Downloads\optiroute_logo.jpeg
 //  Namespace : OptiRoute.Forms
 // =============================================================
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
-using BC = BCrypt.Net.BCrypt;
 using OptiRoute.Core.Data;
 
 namespace OptiRoute.Forms
 {
-    public class SignUpForm : Form
+    public class DriverVehicleForm : Form
     {
         // ── Repository ────────────────────────────────────────────
         private readonly UserRepository _userRepo = new UserRepository();
 
+        // ── Personal details passed from SignUpForm ───────────────
+        private readonly string _firstName;
+        private readonly string _lastName;
+        private readonly string _username;
+        private readonly string _hashedPassword;
+        private readonly string _email;
+        private readonly string _phone;
+
         // ── Controls ──────────────────────────────────────────────
         private Panel leftPanel = null!;
         private Panel rightPanel = null!;
-        private TextBox txtFirstName = null!;
-        private TextBox txtLastName = null!;
-        private TextBox txtEmail = null!;
-        private TextBox txtPhone = null!;
-        private TextBox txtUsername = null!;
-        private TextBox txtPassword = null!;
-        private TextBox txtConfirmPassword = null!;
-        private ComboBox cmbRole = null!;
-        private Button btnSignUp = null!;
+        private TextBox txtLicense = null!;
+        private TextBox txtPlate = null!;
+        private ComboBox cmbVehicleType = null!;
+        private Button btnRegister = null!;
         private Button btnBack = null!;
-        private CheckBox chkShowPassword = null!;
-        private Label lblTitle = null!;
         private PictureBox picLogo = null!;
 
-        // ── Palette ───────────────────────────────────────────────
+        // ── Palette (identical to SignUpForm) ─────────────────────
         private readonly Color Navy = Color.FromArgb(10, 35, 90);
         private readonly Color RoyalBlue = Color.FromArgb(0, 82, 204);
         private readonly Color TextSub = Color.FromArgb(190, 220, 255);
         private readonly Color TextDark = Color.FromArgb(40, 80, 160);
 
         // ── Constructor ───────────────────────────────────────────
-        public SignUpForm()
+        public DriverVehicleForm(
+            string firstName, string lastName, string username,
+            string hashedPassword, string email, string phone)
         {
-            Text = "OptiRoute  |  Create Account";
+            _firstName = firstName;
+            _lastName = lastName;
+            _username = username;
+            _hashedPassword = hashedPassword;
+            _email = email;
+            _phone = phone;
+
+            Text = "OptiRoute  |  Driver — Vehicle Details";
             Size = new Size(980, 860);
             MinimumSize = new Size(900, 800);
             StartPosition = FormStartPosition.CenterScreen;
@@ -78,7 +82,7 @@ namespace OptiRoute.Forms
             };
             leftPanel.Paint += LeftPanel_Paint;
             Controls.Add(leftPanel);
-            BuildSignUpForm();
+            BuildVehicleForm();
 
             rightPanel = new Panel
             {
@@ -89,29 +93,29 @@ namespace OptiRoute.Forms
             Controls.Add(rightPanel);
             BuildBrandPanel();
 
-            Resize += (s, e) => 
+            Resize += (s, e) =>
             {
                 leftPanel.Size = new Size(560, ClientSize.Height);
                 rightPanel.Size = new Size(420, ClientSize.Height);
-                leftPanel.Invalidate(); 
-            }; 
+                leftPanel.Invalidate();
+            };
         }
 
-        // ── LEFT PANEL — SIGN UP FORM ─────────────────────────────
-        private void BuildSignUpForm()
+        // ── LEFT PANEL — VEHICLE FORM ─────────────────────────────
+        private void BuildVehicleForm()
         {
-            lblTitle = new Label
+            // Title
+            leftPanel.Controls.Add(new Label
             {
-                Text = "Create Account",
+                Text = "Vehicle Details",
                 Font = new Font("Segoe UI", 22, FontStyle.Bold),
                 ForeColor = Color.White,
                 AutoSize = true,
                 Location = new Point(50, 28),
                 BackColor = Color.Transparent
-            };
-            leftPanel.Controls.Add(lblTitle);
+            });
 
-            
+            // Underline bar
             leftPanel.Controls.Add(new Panel
             {
                 Location = new Point(50, 88),
@@ -119,60 +123,35 @@ namespace OptiRoute.Forms
                 BackColor = Color.White
             });
 
-            // Row 1 — First Name | Last Name
-            FLabel("First Name", 108, 50);
-            txtFirstName = FInput(132, 50, 230, false);
-
-            FLabel("Last Name", 108, 295);
-            txtLastName = FInput(132, 295, 215, false);
-
-            // Row 2 — Email (full width)
-            FLabel("Email Address", 196, 50);
-            txtEmail = FInputFull(220, false);
-
-            // Row 3 — Phone (full width)
-            FLabel("Phone Number", 280, 50);
-            txtPhone = FInputFull(304, false);
-
-            // Row 4 — Username (full width)
-            FLabel("Username", 364, 50);
-            txtUsername = FInputFull(388, false);
-
-            // Row 5 — Role (full width dropdown)
-            FLabel("Role", 448, 50);
-            BuildRoleDropdown(472);
-
-            // Row 6 — Password | Confirm Password
-            FLabel("Password", 528, 50);
-            txtPassword = FInput(552, 50, 230, true);
-
-            FLabel("Confirm Password", 528, 295);
-            txtConfirmPassword = FInput(552, 295, 215, true);
-
-            // Show passwords checkbox
-            chkShowPassword = new CheckBox
+            // Subtitle
+            leftPanel.Controls.Add(new Label
             {
-                Text = "Show Passwords",
-                Location = new Point(50, 608),
-                AutoSize = true,
-                Font = new Font("Segoe UI", 9f),
+                Text = "Step 2 of 2  —  Enter your vehicle information",
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Italic),
                 ForeColor = TextSub,
-                BackColor = Color.Transparent,
-                Cursor = Cursors.Hand
-            };
-            chkShowPassword.CheckedChanged += (s, e) =>
-            {
-                txtPassword.UseSystemPasswordChar = !chkShowPassword.Checked;
-                txtConfirmPassword.UseSystemPasswordChar = !chkShowPassword.Checked;
-            };
-            leftPanel.Controls.Add(chkShowPassword);
+                AutoSize = true,
+                Location = new Point(50, 98),
+                BackColor = Color.Transparent
+            });
 
-            // Create Account button
-            btnSignUp = new Button
+            // ── Field: License Number ─────────────────────────────
+            FLabel("License Number", 140, 50);
+            txtLicense = FInput(164, 50, 460, false);
+
+            // ── Field: Vehicle Plate Number ───────────────────────
+            FLabel("Vehicle Plate Number", 228, 50);
+            txtPlate = FInput(252, 50, 460, false);
+
+            // ── Field: Vehicle Type dropdown ──────────────────────
+            FLabel("Vehicle Type", 316, 50);
+            BuildVehicleTypeDropdown(340);
+
+            // ── Register button ───────────────────────────────────
+            btnRegister = new Button
             {
-                Text = "CREATE ACCOUNT  →",
-                Location = new Point(50, 640),
-                Size = new Size(300, 48),
+                Text = "COMPLETE REGISTRATION  →",
+                Location = new Point(50, 448),
+                Size = new Size(320, 48),
                 BackColor = Color.White,
                 ForeColor = RoyalBlue,
                 FlatStyle = FlatStyle.Flat,
@@ -180,27 +159,27 @@ namespace OptiRoute.Forms
                 Cursor = Cursors.Hand,
                 TextAlign = ContentAlignment.MiddleCenter
             };
-            btnSignUp.FlatAppearance.BorderSize = 0;
-            btnSignUp.Paint += BtnPaint;
-            btnSignUp.Click += BtnSignUp_Click;
-            btnSignUp.MouseEnter += (s, e) =>
+            btnRegister.FlatAppearance.BorderSize = 0;
+            btnRegister.Paint += BtnPaint;
+            btnRegister.Click += BtnRegister_Click;
+            btnRegister.MouseEnter += (s, e) =>
             {
-                btnSignUp.BackColor = Color.FromArgb(220, 235, 255);
-                btnSignUp.ForeColor = Navy;
+                btnRegister.BackColor = Color.FromArgb(220, 235, 255);
+                btnRegister.ForeColor = Navy;
             };
-            btnSignUp.MouseLeave += (s, e) =>
+            btnRegister.MouseLeave += (s, e) =>
             {
-                btnSignUp.BackColor = Color.White;
-                btnSignUp.ForeColor = RoyalBlue;
+                btnRegister.BackColor = Color.White;
+                btnRegister.ForeColor = RoyalBlue;
             };
-            leftPanel.Controls.Add(btnSignUp);
+            leftPanel.Controls.Add(btnRegister);
 
-            // Back to login button
+            // ── Back button ───────────────────────────────────────
             btnBack = new Button
             {
-                Text = "← Back to Login",
-                Location = new Point(365, 650),
-                Size = new Size(160, 35),
+                Text = "← Back to Signup",
+                Location = new Point(385, 458),
+                Size = new Size(165, 35),
                 BackColor = Color.Transparent,
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
@@ -209,7 +188,7 @@ namespace OptiRoute.Forms
             };
             btnBack.FlatAppearance.BorderSize = 1;
             btnBack.FlatAppearance.BorderColor = Color.FromArgb(100, 255, 255, 255);
-            btnBack.Click += (s, e) => { new LoginForm().Show(); Close(); };
+            btnBack.Click += (s, e) => { new SignUpForm().Show(); Close(); };
             leftPanel.Controls.Add(btnBack);
 
             // Footer note
@@ -220,14 +199,13 @@ namespace OptiRoute.Forms
                 ForeColor = Color.FromArgb(120, 180, 255),
                 Size = new Size(540, 22),
                 TextAlign = ContentAlignment.MiddleCenter,
-                Location = new Point(10, 704),
+                Location = new Point(10, 520),
                 BackColor = Color.Transparent
             });
         }
 
-        // ── ROLE DROPDOWN ─────────────────────────────────────────
-        // Admin is deliberately excluded — it is a preset DB account.
-        private void BuildRoleDropdown(int top)
+        // ── VEHICLE TYPE DROPDOWN ─────────────────────────────────
+        private void BuildVehicleTypeDropdown(int top)
         {
             bool focused = false;
 
@@ -254,7 +232,7 @@ namespace OptiRoute.Forms
                 box.Region = new Region(path);
             };
 
-            cmbRole = new ComboBox
+            cmbVehicleType = new ComboBox
             {
                 Location = new Point(10, 4),
                 Width = 440,
@@ -265,24 +243,21 @@ namespace OptiRoute.Forms
                 DropDownStyle = ComboBoxStyle.DropDownList
             };
 
-            // Only Customer and Driver — Admin logs in directly (no self-registration)
-            cmbRole.Items.AddRange(new object[] { "Select Role...", "Customer", "Driver" });
-            cmbRole.SelectedIndex = 0;
+            cmbVehicleType.Items.AddRange(new object[] { "Bike", "Car", "Van", "Truck" });
+            cmbVehicleType.SelectedIndex = 0;
 
-            cmbRole.Enter += (s, e) => { focused = true; box.Invalidate(); };
-            cmbRole.Leave += (s, e) => { focused = false; box.Invalidate(); };
-
-            // Darken background when dropdown is active
-            cmbRole.DropDown += (s, e) =>
+            cmbVehicleType.Enter += (s, e) => { focused = true; box.Invalidate(); };
+            cmbVehicleType.Leave += (s, e) => { focused = false; box.Invalidate(); };
+            cmbVehicleType.DropDown += (s, e) =>
             {
-                cmbRole.BackColor = Color.FromArgb(20, 50, 130);
+                cmbVehicleType.BackColor = Color.FromArgb(20, 50, 130);
             };
-            cmbRole.DropDownClosed += (s, e) =>
+            cmbVehicleType.DropDownClosed += (s, e) =>
             {
-                cmbRole.BackColor = Color.FromArgb(40, 80, 160);
+                cmbVehicleType.BackColor = Color.FromArgb(40, 80, 160);
             };
 
-            box.Controls.Add(cmbRole);
+            box.Controls.Add(cmbVehicleType);
             leftPanel.Controls.Add(box);
         }
 
@@ -312,7 +287,6 @@ namespace OptiRoute.Forms
             }
             catch
             {
-                // Fallback: draw "OR" initials in a blue circle
                 var bmp = new Bitmap(280, 280);
                 using var g = Graphics.FromImage(bmp);
                 g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -332,22 +306,20 @@ namespace OptiRoute.Forms
                 BackColor = Color.FromArgb(180, 210, 245)
             });
 
-            // Step-by-step guide
-            AddStep("①  Fill in your personal details", 458);
-            AddStep("②  Enter your phone number", 492);
-            AddStep("③  Choose a unique username", 526);
-            AddStep("④  Select your role", 560);
-            AddStep("⑤  Set a strong password", 594);
-            AddStep("⑥  Click Create Account", 628);
+            // Step-by-step guide for vehicle info
+            AddStep("①  Enter your driving license number", 458);
+            AddStep("②  Enter your vehicle plate number", 492);
+            AddStep("③  Select your vehicle type", 526);
+            AddStep("④  Click Complete Registration", 560);
 
-            // Admin info note
+            // Info note
             rightPanel.Controls.Add(new Label
             {
-                Text = "ℹ  Admins log in directly — no signup required.",
+                Text = "ℹ  Your vehicle info can be updated from your profile.",
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
                 ForeColor = Color.FromArgb(150, 170, 210),
                 AutoSize = true,
-                Location = new Point(42, 672),
+                Location = new Point(42, 610),
                 BackColor = Color.Transparent
             });
 
@@ -373,113 +345,51 @@ namespace OptiRoute.Forms
             });
         }
 
-        // ── SIGN UP LOGIC ─────────────────────────────────────────
-        private void BtnSignUp_Click(object? sender, EventArgs e)
+        // ── REGISTER LOGIC ────────────────────────────────────────
+        private void BtnRegister_Click(object? sender, EventArgs e)
         {
-            string firstName = txtFirstName.Text.Trim();
-            string lastName = txtLastName.Text.Trim();
-            string email = txtEmail.Text.Trim();
-            string phone = txtPhone.Text.Trim();
-            string username = txtUsername.Text.Trim();
-            string password = txtPassword.Text;
-            string confirmPassword = txtConfirmPassword.Text;
+            string license = txtLicense.Text.Trim();
+            string plate = txtPlate.Text.Trim();
+            string vtype = cmbVehicleType.SelectedItem?.ToString() ?? "Bike";
 
-            // ── 1. All fields filled ──────────────────────────────
-            if (string.IsNullOrWhiteSpace(firstName) ||
-                string.IsNullOrWhiteSpace(lastName) ||
-                string.IsNullOrWhiteSpace(email) ||
-                string.IsNullOrWhiteSpace(phone) ||
-                string.IsNullOrWhiteSpace(username) ||
-                string.IsNullOrWhiteSpace(password) ||
-                string.IsNullOrWhiteSpace(confirmPassword))
+            // ── 1. License required ───────────────────────────────
+            if (string.IsNullOrWhiteSpace(license))
             {
-                ShowWarning("Please fill in all fields.", "Incomplete Form");
+                ShowWarning("Please enter your license number.", "Incomplete Form");
+                txtLicense.Focus();
                 return;
             }
 
-            // ── 2. Valid phone ────────────────────────────────────
-            if (phone.Length < 10 || phone.Length > 13 ||
-                !System.Text.RegularExpressions.Regex.IsMatch(phone, @"^[0-9\+\-]+$"))
+            // ── 2. Plate required ─────────────────────────────────
+            if (string.IsNullOrWhiteSpace(plate))
             {
-                ShowWarning("Please enter a valid phone number.\nExample: 03001234567",
-                    "Invalid Phone");
+                ShowWarning("Please enter your vehicle plate number.", "Incomplete Form");
+                txtPlate.Focus();
                 return;
             }
 
-            // ── 3. Role selected ──────────────────────────────────
-            if (cmbRole.SelectedIndex == 0)
-            {
-                ShowWarning("Please select a role.", "Role Required");
-                return;
-            }
+            // ── 3. Register in DB ─────────────────────────────────
+            int newID = _userRepo.RegisterDriver(
+                _firstName, _lastName, _username,
+                _hashedPassword, _email, _phone,
+                license, plate, vtype);
 
-            // ── 4. Valid email ────────────────────────────────────
-            if (!email.Contains('@') || !email.Contains('.'))
+            // ── 4. Result ─────────────────────────────────────────
+            if (newID > 0)
             {
-                ShowWarning("Please enter a valid email address.", "Invalid Email");
-                return;
-            }
-
-            // ── 5. Password strength ──────────────────────────────
-            if (password.Length < 6)
-            {
-                ShowWarning("Password must be at least 6 characters.", "Weak Password");
-                return;
-            }
-
-            // ── 6. Passwords match ────────────────────────────────
-            if (password != confirmPassword)
-            {
-                ShowError("Passwords do not match.", "Password Mismatch");
-                return;
-            }
-
-            // ── 7. Username availability ──────────────────────────
-            if (_userRepo.UsernameExists(username))
-            {
-                ShowError("Username already taken. Please choose another.", "Username Exists");
-                return;
-            }
-
-            // ── 8. Hash & register ────────────────────────────────
-            string hashedPassword = BC.HashPassword(password);
-            string role = cmbRole.SelectedItem!.ToString()!;
-
-            if (role == "Customer")
-            {
-                int newID = _userRepo.RegisterCustomer(
-                    firstName, lastName, username,
-                    hashedPassword, email, phone);
-
-                // ── 9. Result (Customer) ──────────────────────────
-                if (newID > 0)
-                {
-                    MessageBox.Show(
-                        "✅  Account created successfully!\nYou can now log in.",
-                        "Success",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information);
-                    new LoginForm().Show();
-                    Close();
-                }
-                else
-                {
-                    ShowError("Registration failed. Please try again.\n" +
-                              "The username may already be in use.",
-                              "Registration Error");
-                }
-                return;
-            }
-            else // Driver — open vehicle details form (step 2)
-            {
-                // Pass all personal details to the vehicle form.
-                // The vehicle form handles the actual DB registration.
-                var vehicleForm = new DriverVehicleForm(
-                    firstName, lastName, username,
-                    hashedPassword, email, phone);
-                vehicleForm.Show();
+                MessageBox.Show(
+                    "✅  Driver account created successfully!\nYou can now log in.",
+                    "Success",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                new LoginForm().Show();
                 Close();
-                return;
+            }
+            else
+            {
+                ShowError("Registration failed. Please try again.\n" +
+                          "The username or plate number may already be in use.",
+                          "Registration Error");
             }
         }
 
@@ -506,9 +416,6 @@ namespace OptiRoute.Forms
                 BackColor = Color.Transparent
             });
         }
-
-        private TextBox FInputFull(int top, bool isPass) =>
-            FInput(top, 50, 460, isPass);
 
         private TextBox FInput(int top, int left, int width, bool isPass)
         {
@@ -594,7 +501,7 @@ namespace OptiRoute.Forms
             g.SmoothingMode = SmoothingMode.AntiAlias;
             var rect = leftPanel.ClientRectangle;
 
-            // Navy → RoyalBlue gradient
+            // Navy → RoyalBlue gradient (identical to SignUpForm)
             using var bg = new LinearGradientBrush(rect, Navy, RoyalBlue,
                 LinearGradientMode.ForwardDiagonal);
             g.FillRectangle(bg, rect);
@@ -625,5 +532,5 @@ namespace OptiRoute.Forms
             path.CloseFigure();
             return path;
         }
-    } 
+    }
 }
