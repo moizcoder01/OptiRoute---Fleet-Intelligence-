@@ -9,6 +9,9 @@
 //       RefreshMyOrders() called on every sidebar click.
 //    4. My Profile: full profile card + photo upload + change password.
 //    5. Profile photo stored as path — loaded from disk each time.
+//    6. Recent Orders table: Date column now fills remaining width
+//       dynamically (same approach as Admin "Pending Orders" table)
+//       so no column is ever cut off on screen.
 //
 //  ARCHITECTURE : Zero SQL in this file.
 //  THEME        : 100% preserved — same colours, fonts, cards.
@@ -42,6 +45,11 @@ namespace OptiRoute.Forms
         private Panel sidePanel = null!;
         private Panel mainPanel = null!;
         private Panel headerPanel = null!;
+
+        // ── Sidebar toggle ────────────────────────────────────────
+        private Button btnToggle = null!;
+        private bool _sidebarOpen = true;
+        private const int SideW = 188;
 
         // ── Sidebar controls ──────────────────────────────────────
         private Panel picAvatar = null!;
@@ -104,6 +112,7 @@ namespace OptiRoute.Forms
             Font = new Font("Segoe UI", 9f);
 
             BuildLayout();
+
             Load += (s, e) => { RefreshDashboard(); ShowPanel(pnlDashboard, btnDashboard); };
             ShowPanel(pnlDashboard, btnDashboard);
         }
@@ -115,7 +124,7 @@ namespace OptiRoute.Forms
             sidePanel = new Panel
             {
                 Location = new Point(0, 0),
-                Size = new Size(188, ClientSize.Height),
+                Size = new Size(SideW, ClientSize.Height),
                 BackColor = SidebarBg
             };
             sidePanel.Paint += SidePanel_Paint;
@@ -124,8 +133,8 @@ namespace OptiRoute.Forms
 
             headerPanel = new Panel
             {
-                Location = new Point(188, 0),
-                Size = new Size(ClientSize.Width - 188, 56),
+                Location = new Point(SideW, 0),
+                Size = new Size(ClientSize.Width - SideW, 56),
                 BackColor = Color.White
             };
             headerPanel.Paint += (s, e) =>
@@ -139,8 +148,8 @@ namespace OptiRoute.Forms
 
             mainPanel = new Panel
             {
-                Location = new Point(188, 56),
-                Size = new Size(ClientSize.Width - 188, ClientSize.Height - 56),
+                Location = new Point(SideW, 56),
+                Size = new Size(ClientSize.Width - SideW, ClientSize.Height - 56),
                 BackColor = PageBg,
                 AutoScroll = false
             };
@@ -152,17 +161,27 @@ namespace OptiRoute.Forms
             BuildPlaceOrderPanel();
             BuildProfilePanel();
 
-            Resize += (s, e) =>
-            {
-                sidePanel.Size = new Size(188, ClientSize.Height);
-                headerPanel.Size = new Size(ClientSize.Width - 188, 56);
-                mainPanel.Size = new Size(ClientSize.Width - 188, ClientSize.Height - 56);
-                foreach (Control c in mainPanel.Controls)
-                    if (c is Panel pg) pg.Size = mainPanel.Size;
+            Resize += (s, e) => ApplyLayout();
+        }
+
+        private void ApplyLayout()
+        {
+            int offset = _sidebarOpen ? SideW : 0;
+            sidePanel.Size = new Size(SideW, ClientSize.Height);
+            headerPanel.Location = new Point(offset, 0);
+            headerPanel.Size = new Size(ClientSize.Width - offset, 56);
+            mainPanel.Location = new Point(offset, 56);
+            mainPanel.Size = new Size(ClientSize.Width - offset, ClientSize.Height - 56);
+            foreach (Control c in mainPanel.Controls)
+                if (c is Panel pg) pg.Size = mainPanel.Size;
+            sidePanel.Invalidate();
+            headerPanel.Invalidate();
+            if (btnToggle != null)
+                btnToggle.Location = new Point(10, 14);
+
+            // Re-render dashboard so cards always fill the real current width
+            if (pnlDashboard != null && pnlDashboard.Visible)
                 RefreshDashboard();
-                sidePanel.Invalidate();
-                headerPanel.Invalidate();
-            };
         }
 
         // ═════════════════════════════════════════════════════════
@@ -174,7 +193,7 @@ namespace OptiRoute.Forms
             var logo = new Panel
             {
                 Location = new Point(0, 0),
-                Size = new Size(188, 56),
+                Size = new Size(SideW, 56),
                 BackColor = Color.Transparent
             };
             logo.Paint += (s, e) =>
@@ -189,7 +208,7 @@ namespace OptiRoute.Forms
                 Font = new Font("Segoe UI", 13, FontStyle.Bold),
                 ForeColor = Color.White,
                 BackColor = Color.Transparent,
-                Size = new Size(188, 56),
+                Size = new Size(SideW, 56),
                 TextAlign = ContentAlignment.MiddleCenter,
                 Location = new Point(0, 0)
             });
@@ -211,7 +230,7 @@ namespace OptiRoute.Forms
                 Font = new Font("Segoe UI", 9, FontStyle.Bold),
                 ForeColor = Color.White,
                 BackColor = Color.Transparent,
-                Size = new Size(188, 20),
+                Size = new Size(SideW, 20),
                 TextAlign = ContentAlignment.MiddleCenter,
                 Location = new Point(0, 136)
             };
@@ -223,7 +242,7 @@ namespace OptiRoute.Forms
                 Font = new Font("Segoe UI", 8f),
                 ForeColor = SkyBlue,
                 BackColor = Color.Transparent,
-                Size = new Size(188, 16),
+                Size = new Size(SideW, 16),
                 TextAlign = ContentAlignment.MiddleCenter,
                 Location = new Point(0, 158)
             };
@@ -262,6 +281,15 @@ namespace OptiRoute.Forms
                 TextAlign = ContentAlignment.MiddleLeft
             };
             btnLogout.FlatAppearance.BorderSize = 0;
+            btnLogout.MouseEnter += (logoutSender, logoutArgs) =>
+            {
+                btnLogout.ForeColor = Color.White;
+            };
+
+            btnLogout.MouseLeave += (logoutSender, logoutArgs) =>
+            {
+                btnLogout.ForeColor = Color.FromArgb(255, 100, 100);
+            };
             btnLogout.Click += (s, e) =>
             {
                 if (MessageBox.Show("Are you sure you want to logout?", "Logout",
@@ -276,7 +304,7 @@ namespace OptiRoute.Forms
                 Font = new Font("Segoe UI", 7f),
                 ForeColor = Color.FromArgb(60, 255, 255, 255),
                 BackColor = Color.Transparent,
-                Size = new Size(188, 16),
+                Size = new Size(SideW, 16),
                 TextAlign = ContentAlignment.MiddleCenter,
                 Location = new Point(0, 470)
             });
@@ -323,8 +351,8 @@ namespace OptiRoute.Forms
                 TextAlign = ContentAlignment.MiddleLeft
             };
             b.FlatAppearance.BorderSize = 0;
-            b.MouseEnter += (s, e) => { if (b != activeBtn) b.BackColor = Color.FromArgb(20, 255, 255, 255); };
-            b.MouseLeave += (s, e) => { if (b != activeBtn) b.BackColor = Color.Transparent; };
+            b.MouseEnter += (s, e) => { if (b != activeBtn) b.BackColor = Color.White; b.ForeColor = Color.FromArgb(10, 35, 90); };
+            b.MouseLeave += (s, e) => { if (b != activeBtn) b.BackColor = Color.Transparent; b.ForeColor = Color.FromArgb(180, 220, 255); };
             sidePanel.Controls.Add(b);
             return b;
         }
@@ -347,13 +375,28 @@ namespace OptiRoute.Forms
         // ═════════════════════════════════════════════════════════
         private void BuildHeader()
         {
+            btnToggle = new Button
+            {
+                Text = "☰",
+                Location = new Point(10, 14),
+                Size = new Size(34, 30),
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 13f),
+                ForeColor = TextDark,
+                BackColor = Color.White,
+                Cursor = Cursors.Hand
+            };
+            btnToggle.FlatAppearance.BorderSize = 0;
+            btnToggle.Click += (s, e) => ToggleSidebar();
+            headerPanel.Controls.Add(btnToggle);
+
             headerPanel.Controls.Add(new Label
             {
                 Text = "Customer Dashboard",
                 Font = new Font("Segoe UI", 12, FontStyle.Bold),
                 ForeColor = TextDark,
                 AutoSize = true,
-                Location = new Point(20, 6),
+                Location = new Point(54, 18),
                 BackColor = Color.White
             });
 
@@ -371,8 +414,35 @@ namespace OptiRoute.Forms
                 lblDate.Location = new Point(headerPanel.Width - lblDate.PreferredWidth - 20, 18);
         }
 
+        private void ToggleSidebar()
+        {
+            _sidebarOpen = !_sidebarOpen;
+            sidePanel.Visible = _sidebarOpen;
+            ApplyLayout();
+
+            if (activeBtn != null)
+            {
+                Panel? activePage = null;
+                if (activeBtn == btnDashboard) activePage = pnlDashboard;
+                else if (activeBtn == btnMyOrders) activePage = pnlMyOrders;
+                else if (activeBtn == btnTrackOrder) activePage = pnlTrackOrder;
+                else if (activeBtn == btnPlaceOrder) activePage = pnlPlaceOrder;
+                else if (activeBtn == btnProfile) activePage = pnlProfile;
+
+                if (activePage != null)
+                {
+                    activePage.Size = mainPanel.Size;
+                    activePage.Visible = true;
+                }
+            }
+        }
+
         // ═════════════════════════════════════════════════════════
         //  PAGE 1 — DASHBOARD
+        //  BuildDashboardPanel: empty shell only — content built in
+        //  RefreshDashboard() which is called on Load (after maximise)
+        //  so mainPanel.Width is the real screen width, not the
+        //  constructor minimum. Matches exactly how Admin does it.
         // ═════════════════════════════════════════════════════════
         private void BuildDashboardPanel()
         {
@@ -381,17 +451,20 @@ namespace OptiRoute.Forms
 
         private void RefreshDashboard()
         {
+            // Ensure pnlDashboard matches mainPanel's current (maximised) size
+            pnlDashboard.Size = mainPanel.Size;
+
+            // Clear old content and rebuild with the real (maximised) width
             pnlDashboard.Controls.Clear();
 
-            int W = mainPanel.Width; // real width after maximized
+            int W = mainPanel.Width; // real width after form is maximised
 
             // ── Welcome banner ────────────────────────────────────
             var banner = new Panel
             {
-                Location = new Point(30, 22),
-                Size = new Size(W - 60, 96),
-                BackColor = Color.Transparent,
-                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+                Location = new Point(20, 14),
+                Size = new Size(W - 40, 76),
+                BackColor = Color.Transparent
             };
             banner.Paint += (s, e) =>
             {
@@ -408,43 +481,47 @@ namespace OptiRoute.Forms
                 new Font("Segoe UI", 10f), Color.FromArgb(200, 235, 255), new Point(22, 44)));
             pnlDashboard.Controls.Add(banner);
 
-            // ── Stat cards — sized to fill the full screen width ──
+            // ── Stat cards — fill full available width ────────────
             var summary = _orderRepo.GetSummary(_customer.UserID);
-            int cGap = 16;
-            int cW = (W - 60 - 3 * cGap) / 4;
-            int cH = 130, cTop = 138;
+            int cGap = 14, cH = 110, cTop = 104;
+            int cW = (W - 40 - 3 * cGap) / 4; // same dynamic formula as Admin
 
-            BuildStatCard(pnlDashboard, 30, cTop, "📦", "Total Orders",
+            BuildStatCard(pnlDashboard, 20, cTop, "📦", "Total Orders",
                 summary.Total.ToString(), RoyalBlue, cW, cH);
-            BuildStatCard(pnlDashboard, 30 + (cW + cGap), cTop, "🚚", "In Transit",
+            BuildStatCard(pnlDashboard, 20 + (cW + cGap), cTop, "🚚", "In Transit",
                 summary.InTransit.ToString(), OrangeWarn, cW, cH);
-            BuildStatCard(pnlDashboard, 30 + (cW + cGap) * 2, cTop, "✅", "Delivered",
+            BuildStatCard(pnlDashboard, 20 + (cW + cGap) * 2, cTop, "✅", "Delivered",
                 summary.Delivered.ToString(), GreenOk, cW, cH);
-            BuildStatCard(pnlDashboard, 30 + (cW + cGap) * 3, cTop, "⚡", "Urgent",
+            BuildStatCard(pnlDashboard, 20 + (cW + cGap) * 3, cTop, "⚡", "Urgent",
                 summary.Urgent.ToString(), RedAlert, cW, cH);
 
-            // ── Recent orders table — full width, Date column fills remaining space ──
-            int tblW = W - 60;
-            int tblTop = 292;
-            int tblH = 420;
+            // ── Recent orders table ───────────────────────────────
+            // tblW is the real available width — Date column gets the
+            // remaining space so nothing is clipped on the right.
+            int tblTop = cTop + cH + 14;
+            int tblH = pnlDashboard.Height - tblTop - 14;
+            if (tblH < 180) tblH = 180;
 
-            var tbl = Card(30, tblTop, tblW, tblH);
-            tbl.Anchor = AnchorStyles.Top | AnchorStyles.Left |
-                         AnchorStyles.Right | AnchorStyles.Bottom;
+            int tblW = W - 40; // full available width (matches Admin pattern)
+            var tbl = Card(20, tblTop, tblW, tblH);
             pnlDashboard.Controls.Add(tbl);
 
             tbl.Controls.Add(L("📋  Recent Orders",
-                new Font("Segoe UI", 13, FontStyle.Bold), TextDark, new Point(20, 16)));
-            tbl.Controls.Add(L("📦  All Recent Orders",
-                new Font("Segoe UI", 10f, FontStyle.Bold), TextGray, new Point(20, 46)));
+                new Font("Segoe UI", 12, FontStyle.Bold), TextDark, new Point(16, 12)));
 
+            tbl.Controls.Add(L("📦  All Recent Orders",
+                new Font("Segoe UI", 10f, FontStyle.Bold), TextGray, new Point(16, 40)));
+
+            // Columns: Order ID, Item, Weight, Priority, Pick-up, Delivery, Status, Date
+            // Fixed widths for first 7 columns; Date fills the remainder — same as Admin.
             string[] hdrs = { "Order ID", "Item", "Weight", "Priority",
                                "Pick-up", "Delivery", "Status", "Date" };
-            int fixedCols = 80 + 130 + 75 + 90 + 140 + 150 + 110;
-            int dateColW = tblW - 32 - fixedCols;
-            if (dateColW < 110) dateColW = 110;
-            int[] wids = { 80, 130, 75, 90, 140, 150, 110, dateColW };
+            int fixedCols = 80 + 130 + 75 + 90 + 140 + 150 + 110; // sum of first 7 cols
+            int dateW = tblW - 32 - fixedCols; // tblW minus left(16)+right(16) padding
+            if (dateW < 90) dateW = 90;
+            int[] wids = { 80, 130, 75, 90, 140, 150, 110, dateW };
 
+            // Draw header row
             int hx = 16;
             foreach (var (h, w) in Zip(hdrs, wids))
             {
@@ -462,6 +539,7 @@ namespace OptiRoute.Forms
                 hx += w;
             }
 
+            // Draw data rows
             int rowY = 92; bool alt = false;
             List<Order> recent = _orderRepo.GetRecentByCustomer(_customer.UserID, 8);
 
@@ -502,12 +580,12 @@ namespace OptiRoute.Forms
                     });
                     rx += w;
                 }
-                rowY += 38;
+                rowY += 32;
                 if (rowY > tblH - 20) break;
             }
         }
 
-        // FIX 5: stat card — icon top, value middle, label bottom (no collision)
+        // Stat card — icon left, value right of icon (same line), label below
         private void BuildStatCard(Panel parent, int x, int y,
             string icon, string title, string value, Color accent, int w, int h)
         {
@@ -520,11 +598,11 @@ namespace OptiRoute.Forms
                 Size = new Size(w, 4),
                 BackColor = accent
             });
-            // icon — left side, vertically centred
-            c.Controls.Add(L(icon, new Font("Segoe UI", 20), accent, new Point(14, 12)));
-            // value — large, beside icon
-            c.Controls.Add(L(value, new Font("Segoe UI", 22, FontStyle.Bold), accent, new Point(60, 10)));
-            // label — below, smaller
+            // icon — left, vertically centred in upper half
+            c.Controls.Add(L(icon, new Font("Segoe UI", 20), accent, new Point(14, 18)));
+            // value — right of icon, same line
+            c.Controls.Add(L(value, new Font("Segoe UI", 22, FontStyle.Bold), accent, new Point(60, 14)));
+            // label — below icon+value
             c.Controls.Add(L(title, new Font("Segoe UI", 9f), TextGray, new Point(14, 72)));
             parent.Controls.Add(c);
         }

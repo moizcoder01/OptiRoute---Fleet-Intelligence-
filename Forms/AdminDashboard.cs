@@ -39,6 +39,11 @@ namespace OptiRoute.Forms
         private Panel mainPanel = null!;
         private Panel headerPanel = null!;
 
+        // ── Sidebar toggle ────────────────────────────────────────
+        private Button btnToggle = null!;
+        private bool _sidebarOpen = true;
+        private const int SideW = 232;
+
         // ── Sidebar buttons ───────────────────────────────────────
         private Panel picAvatar = null!;
         private Label lblAdminName = null!;
@@ -111,7 +116,7 @@ namespace OptiRoute.Forms
             sidePanel = new Panel
             {
                 Location = new Point(0, 0),
-                Size = new Size(232, ClientSize.Height),
+                Size = new Size(SideW, ClientSize.Height),
                 BackColor = SidebarBg
             };
             sidePanel.Paint += SidePanel_Paint;
@@ -120,8 +125,8 @@ namespace OptiRoute.Forms
 
             headerPanel = new Panel
             {
-                Location = new Point(232, 0),
-                Size = new Size(ClientSize.Width - 232, 62),
+                Location = new Point(SideW, 0),
+                Size = new Size(ClientSize.Width - SideW, 62),
                 BackColor = Color.White
             };
             headerPanel.Paint += (s, e) =>
@@ -135,8 +140,8 @@ namespace OptiRoute.Forms
 
             mainPanel = new Panel
             {
-                Location = new Point(232, 62),
-                Size = new Size(ClientSize.Width - 232, ClientSize.Height - 62),
+                Location = new Point(SideW, 62),
+                Size = new Size(ClientSize.Width - SideW, ClientSize.Height - 62),
                 BackColor = PageBg,
                 AutoScroll = true
             };
@@ -149,18 +154,27 @@ namespace OptiRoute.Forms
             BuildReportsPanel();
             BuildProfilePanel();
 
-            Resize += (s, e) =>
-            {
-                sidePanel.Size = new Size(232, ClientSize.Height);
-                headerPanel.Size = new Size(ClientSize.Width - 232, 62);
-                mainPanel.Size = new Size(ClientSize.Width - 232, ClientSize.Height - 62);
-                // Resize every page panel to match mainPanel so content fills the screen
-                foreach (Control c in mainPanel.Controls)
-                    if (c is Panel pg) pg.Size = mainPanel.Size;
+            Resize += (s, e) => ApplyLayout();
+        }
+
+        private void ApplyLayout()
+        {
+            int offset = _sidebarOpen ? SideW : 0;
+            sidePanel.Size = new Size(SideW, ClientSize.Height);
+            headerPanel.Location = new Point(offset, 0);
+            headerPanel.Size = new Size(ClientSize.Width - offset, 62);
+            mainPanel.Location = new Point(offset, 62);
+            mainPanel.Size = new Size(ClientSize.Width - offset, ClientSize.Height - 62);
+            foreach (Control c in mainPanel.Controls)
+                if (c is Panel pg) pg.Size = mainPanel.Size;
+            sidePanel.Invalidate();
+            headerPanel.Invalidate();
+            if (btnToggle != null)
+                btnToggle.Location = new Point(10, 16);
+
+            // Re-render dashboard so banner+cards always fill the real current width
+            if (pnlDashboard != null && pnlDashboard.Visible)
                 RefreshDashboard();
-                sidePanel.Invalidate();
-                headerPanel.Invalidate();
-            };
         }
 
         // ═════════════════════════════════════════════════════════
@@ -268,13 +282,26 @@ namespace OptiRoute.Forms
                 ForeColor = Color.FromArgb(255, 100, 100),
                 BackColor = Color.FromArgb(30, 255, 80, 80),
                 Cursor = Cursors.Hand,
-                TextAlign = ContentAlignment.MiddleLeft
+                TextAlign = ContentAlignment.MiddleLeft,
+                Tag = "⏻",
+                Name = "btnLogout"
             };
             btnLogout.FlatAppearance.BorderSize = 0;
+
+            // Unique variables taake bilkul koi error na aaye
+            btnLogout.MouseEnter += (logoutSender, logoutArgs) =>
+            {
+                btnLogout.ForeColor = Color.White;
+            };
+
+            btnLogout.MouseLeave += (logoutSender, logoutArgs) =>
+            {
+                btnLogout.ForeColor = Color.FromArgb(255, 100, 100);
+            };
+
             btnLogout.Click += (s, e) =>
             {
-                if (MessageBox.Show("Are you sure you want to logout?", "Logout",
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                if (MessageBox.Show("Are you sure you want to logout?", "Logout", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
                 { new LoginForm().Show(); Close(); }
             };
             sidePanel.Controls.Add(btnLogout);
@@ -306,8 +333,8 @@ namespace OptiRoute.Forms
                 TextAlign = ContentAlignment.MiddleLeft
             };
             b.FlatAppearance.BorderSize = 0;
-            b.MouseEnter += (s, e) => { if (b != activeBtn) b.BackColor = Color.FromArgb(20, 255, 255, 255); };
-            b.MouseLeave += (s, e) => { if (b != activeBtn) b.BackColor = Color.Transparent; };
+            b.MouseEnter += (s, e) => { if (b != activeBtn) b.BackColor = Color.White; b.ForeColor = Color.FromArgb(10, 35, 90); };
+            b.MouseLeave += (s, e) => { if (b != activeBtn) b.BackColor = Color.Transparent; b.ForeColor = Color.FromArgb(180, 220, 255); };
             sidePanel.Controls.Add(b);
             return b;
         }
@@ -330,15 +357,32 @@ namespace OptiRoute.Forms
         // ═════════════════════════════════════════════════════════
         private void BuildHeader()
         {
+            // ── Hamburger toggle button ───────────────────────────
+            btnToggle = new Button
+            {
+                Text = "☰",
+                Location = new Point(10, 16),
+                Size = new Size(34, 30),
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 13f),
+                ForeColor = TextDark,
+                BackColor = Color.White,
+                Cursor = Cursors.Hand
+            };
+            btnToggle.FlatAppearance.BorderSize = 0;
+            btnToggle.Click += (s, e) => ToggleSidebar();
+            headerPanel.Controls.Add(btnToggle);
+
             headerPanel.Controls.Add(new Label
             {
                 Text = "Admin Control Panel",
                 Font = new Font("Segoe UI", 13, FontStyle.Bold),
                 ForeColor = TextDark,
                 AutoSize = true,
-                Location = new Point(22, 8),
+                Location = new Point(54, 18),
                 BackColor = Color.White
             });
+
             var lblDate = new Label
             {
                 Text = "📅  " + DateTime.Now.ToString("dddd, dd MMMM yyyy"),
@@ -351,6 +395,31 @@ namespace OptiRoute.Forms
             headerPanel.Controls.Add(lblDate);
             headerPanel.Resize += (s, e) =>
                 lblDate.Location = new Point(headerPanel.Width - lblDate.PreferredWidth - 24, 20);
+        }
+
+        private void ToggleSidebar()
+        {
+            _sidebarOpen = !_sidebarOpen;
+            sidePanel.Visible = _sidebarOpen;
+            ApplyLayout();
+
+            // Re-show the active page so content redraws at correct width
+            if (activeBtn != null)
+            {
+                Panel? activePage = null;
+                if (activeBtn == btnDashboard) activePage = pnlDashboard;
+                else if (activeBtn == btnOrders) activePage = pnlOrders;
+                else if (activeBtn == btnAssign) activePage = pnlAssign;
+                else if (activeBtn == btnDrivers) activePage = pnlDrivers;
+                else if (activeBtn == btnReports) activePage = pnlReports;
+                else if (activeBtn == btnProfile) activePage = pnlProfile;
+
+                if (activePage != null)
+                {
+                    activePage.Size = mainPanel.Size;
+                    activePage.Visible = true;
+                }
+            }
         }
 
         // ═════════════════════════════════════════════════════════
@@ -503,14 +572,20 @@ namespace OptiRoute.Forms
             int[] wids = { 65, 110, 75, 85, 120, 120, 100, 90, 110, 100 };
             DrawTableHeader(tblCard, hdrs, wids, 16);
 
-            // Fetch correct set based on filter
-            List<Order> orders = statusFilter == "All"
-                ? _orderRepo.GetAllOrders()
-                : _orderRepo.GetByStatus(statusFilter);
+            List<Order> orders = _orderRepo.GetAllPending();
+
+            if (statusFilter != "Pending" && statusFilter != "All")
+            {
+                tblCard.Controls.Add(L($"Showing {statusFilter} orders — select 'All' or 'Pending' to see data.",
+                    new Font("Segoe UI", 10f), TextGray, new Point(20, 60)));
+                return;
+            }
 
             int rowY = 56; bool alt = false;
             foreach (Order o in orders)
             {
+                if (statusFilter != "All" && o.OrderStatus != statusFilter) continue;
+
                 string[] row =
                 {
                     "#" + o.OrderID, o.ItemName, o.WeightDisplay, o.Priority,
