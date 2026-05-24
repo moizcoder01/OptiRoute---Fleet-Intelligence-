@@ -19,9 +19,12 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.Web.WebView2.WinForms;
 using OptiRoute.Core.Data;
 using OptiRoute.Core.Models;
+using OptiRoute.Core.Services;
 
 namespace OptiRoute.Forms
 {
@@ -30,6 +33,8 @@ namespace OptiRoute.Forms
         // ── Repositories ──────────────────────────────────────────
         private readonly UserRepository _userRepo = new UserRepository();
         private readonly OrderRepository _orderRepo = new OrderRepository();
+        private readonly DriverRepository _driverRepo = new DriverRepository();
+        private readonly RouteService _routeSvc = new RouteService();
 
         // ── Loaded admin model ────────────────────────────────────
         private Admin _admin = null!;
@@ -572,20 +577,14 @@ namespace OptiRoute.Forms
             int[] wids = { 65, 110, 75, 85, 120, 120, 100, 90, 110, 100 };
             DrawTableHeader(tblCard, hdrs, wids, 16);
 
-            List<Order> orders = _orderRepo.GetAllPending();
-
-            if (statusFilter != "Pending" && statusFilter != "All")
-            {
-                tblCard.Controls.Add(L($"Showing {statusFilter} orders — select 'All' or 'Pending' to see data.",
-                    new Font("Segoe UI", 10f), TextGray, new Point(20, 60)));
-                return;
-            }
+            // Fetch the correct set of orders based on filter
+            List<Order> orders = statusFilter == "All"
+                ? _orderRepo.GetAllOrders()
+                : _orderRepo.GetByStatus(statusFilter);
 
             int rowY = 56; bool alt = false;
             foreach (Order o in orders)
             {
-                if (statusFilter != "All" && o.OrderStatus != statusFilter) continue;
-
                 string[] row =
                 {
                     "#" + o.OrderID, o.ItemName, o.WeightDisplay, o.Priority,
@@ -734,7 +733,6 @@ namespace OptiRoute.Forms
                 dCard.Controls.Add(L("⭐  Rating: " + d.AverageRating.ToString("N1"),
                     new Font("Segoe UI", 9f), OrangeWarn, new Point(16, 70)));
 
-                // Assign button
                 var btnAssignOrder = new Button
                 {
                     Text = "Assign Order →",
@@ -748,9 +746,14 @@ namespace OptiRoute.Forms
                 };
                 btnAssignOrder.FlatAppearance.BorderSize = 0;
 
-                // Capture VehicleID (not DriverID) for AssignVehicle()
                 int capturedVehicle = d.VehicleID;
+                int capturedDriverID = d.UserID;
                 string capturedName = d.FullName;
+                double capturedFuel = d.CurrentFuel;
+                double capturedLat = d.CurrentLat;
+                double capturedLng = d.CurrentLng;
+                double capturedMaintPct = d.MaintenancePct;
+                bool capturedNeedsMaint = d.NeedsMaintenance;
 
                 btnAssignOrder.Click += (s, e) =>
                 {
@@ -762,10 +765,11 @@ namespace OptiRoute.Forms
                         return;
                     }
 
-                    var frm = new Form
+                    // ── Step 1: Select order ──────────────────────
+                    var selFrm = new Form
                     {
-                        Text = "Select Order to Assign to " + capturedName,
-                        Size = new Size(420, 360),
+                        Text = "Select Order → " + capturedName,
+                        Size = new Size(460, 380),
                         StartPosition = FormStartPosition.CenterParent,
                         FormBorderStyle = FormBorderStyle.FixedDialog,
                         MaximizeBox = false,
@@ -774,53 +778,128 @@ namespace OptiRoute.Forms
                     var lb = new ListBox
                     {
                         Location = new Point(16, 16),
-                        Size = new Size(370, 240),
+                        Size = new Size(416, 240),
                         Font = new Font("Segoe UI", 10f)
                     };
                     foreach (Order po in stillPending)
                         lb.Items.Add($"#{po.OrderID}  {po.ItemName}  ({po.WeightDisplay})  " +
-                                     $"{po.PickupPoint} → {po.DeliveryPoint}");
+                                     $"{po.PickupPoint} → {po.DeliveryPoint}" +
+                                     (po.IsUrgent ? "  ⚡ URGENT" : ""));
 
-                    var btnOk = new Button
+                    var lblSelStatus = new Label
                     {
-                        Text = "Assign",
-                        Location = new Point(16, 272),
-                        Size = new Size(180, 40),
-                        FlatStyle = FlatStyle.Flat,
-                        BackColor = RoyalBlue,
-                        ForeColor = Color.White,
-                        Font = new Font("Segoe UI", 11, FontStyle.Bold)
+                        Text = "Select an order then click Preview Route.",
+                        Font = new Font("Segoe UI", 9f),
+                        ForeColor = TextGray,
+                        AutoSize = true,
+                        Location = new Point(16, 264)
                     };
-                    btnOk.FlatAppearance.BorderSize = 0;
-                    btnOk.Click += (bs, be) =>
+
+                    var btnPreview = new Button
+                    {
+                        Text = "🗺  Preview Route",
+                        Location = new Point(16, 290),
+                        Size = new Size(200, 40),
+                        FlatStyle = FlatStyle.Flat,
+                        BackColor = PurpleAccent,
+                        ForeColor = Color.White,
+                        Font = new Font("Segoe UI", 10f, FontStyle.Bold),
+                        Cursor = Cursors.Hand
+                    };
+                    btnPreview.FlatAppearance.BorderSize = 0;
+
+                    selFrm.Controls.Add(lb);
+                    selFrm.Controls.Add(lblSelStatus);
+                    selFrm.Controls.Add(btnPreview);
+
+                    btnPreview.Click += async (ps, pe) =>
                     {
                         if (lb.SelectedIndex < 0)
                         {
-                            MessageBox.Show("Please select an order.", "Warning",
+                            lblSelStatus.ForeColor = RedAlert;
+                            lblSelStatus.Text = "⚠  Please select an order first.";
+                            return;
+                        }
+
+                        Order selected = stillPending[lb.SelectedIndex];
+
+                        // ── Maintenance block for urgent orders ───
+                        if (selected.IsUrgent && capturedNeedsMaint)
+                        {
+                            MessageBox.Show(
+                                $"⚠️  Cannot assign urgent order to {capturedName}.\n" +
+                                $"Vehicle needs maintenance (health: {capturedMaintPct:N0}%).\n" +
+                                "Please service the vehicle before assigning urgent orders.",
+                                "Maintenance Required",
                                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
                             return;
                         }
-                        Order selected = stillPending[lb.SelectedIndex];
-                        // Uses AssignVehicle (VehicleID) — aligned with DB schema
-                        bool ok = _orderRepo.AssignVehicle(selected.OrderID, capturedVehicle);
-                        if (ok)
+
+                        lblSelStatus.ForeColor = TextGray;
+                        lblSelStatus.Text = "⏳  Calculating optimal route via ORS...";
+                        btnPreview.Enabled = false;
+
+                        // ── Call ORS ──────────────────────────────
+                        // Use driver's stored GPS if available,
+                        // otherwise ORS geocodes the pickup address
+                        // as the route start (driver at pickup point).
+                        Core.Services.RouteResult? route = null;
+                        try
+                        {
+                            if (capturedLat != 0 && capturedLng != 0)
+                            {
+                                route = await _routeSvc.GetOptimalRouteAsync(
+                                    selected.PickupPoint,
+                                    selected.DeliveryPoint,
+                                    driverLat: capturedLat,
+                                    driverLng: capturedLng);
+                            }
+                            else
+                            {
+                                // No stored GPS — route is Pickup → Destination only
+                                route = await _routeSvc.GetOptimalRouteAsync(
+                                    selected.PickupPoint,
+                                    selected.DeliveryPoint);
+                            }
+                        }
+                        catch { route = null; }
+
+                        btnPreview.Enabled = true;
+
+                        if (route == null)
+                        {
+                            lblSelStatus.ForeColor = RedAlert;
+                            lblSelStatus.Text = "❌  Could not calculate route. Check addresses and internet.";
+                            return;
+                        }
+
+                        // ── Fuel check ────────────────────────────
+                        // 0.08 L/km default fuel rate
+                        double fuelNeeded = route.TotalDistanceKm * 0.08;
+                        if (capturedFuel < fuelNeeded)
                         {
                             MessageBox.Show(
-                                $"✅  Order #{selected.OrderID} assigned to {capturedName}.",
-                                "Assigned", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                            frm.Close();
-                            RefreshAssign();
+                                $"⛽  Insufficient fuel for this route.\n\n" +
+                                $"Route distance : {route.TotalDistanceKm:N1} km\n" +
+                                $"Fuel needed    : {fuelNeeded:N1} L\n" +
+                                $"Driver's fuel  : {capturedFuel:N1} L\n\n" +
+                                "Please refuel before assigning this order.",
+                                "Fuel Insufficient",
+                                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            lblSelStatus.ForeColor = RedAlert;
+                            lblSelStatus.Text = "❌  Driver does not have enough fuel.";
+                            return;
                         }
-                        else
-                        {
-                            MessageBox.Show("❌  Assignment failed. Please try again.",
-                                "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        }
+
+                        selFrm.Close();
+
+                        // ── Show route map + confirm dialog ───────
+                        ShowRouteConfirmDialog(
+                            selected, capturedName, capturedVehicle,
+                            route, capturedFuel, fuelNeeded);
                     };
 
-                    frm.Controls.Add(lb);
-                    frm.Controls.Add(btnOk);
-                    frm.ShowDialog(this);
+                    selFrm.ShowDialog(this);
                 };
 
                 dCard.Controls.Add(btnAssignOrder);
@@ -828,6 +907,297 @@ namespace OptiRoute.Forms
                 dy += 120;
                 if (dy > 620) break;
             }
+        }
+
+        // ─────────────────────────────────────────────────────────
+        //  ROUTE CONFIRM DIALOG
+        //  Shows the Leaflet map with Driver→Pickup→Destination
+        //  route drawn. No animation, no simulation — static view.
+        //  Admin confirms or cancels.
+        // ─────────────────────────────────────────────────────────
+        private void ShowRouteConfirmDialog(
+            Order order, string driverName, int vehicleID,
+            Core.Services.RouteResult route,
+            double driverFuel, double fuelNeeded)
+        {
+            var dlg = new Form
+            {
+                Text = $"Route Preview — Order #{order.OrderID} → {driverName}",
+                Size = new Size(900, 680),
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false,
+                BackColor = PageBg
+            };
+
+            // ── Info strip at top ─────────────────────────────
+            var infoPanel = new Panel
+            {
+                Location = new Point(0, 0),
+                Size = new Size(900, 70),
+                BackColor = Color.White
+            };
+            infoPanel.Controls.Add(L(
+                $"📦  Order #{order.OrderID}  |  {order.ItemName}  |  " +
+                $"🟢 {order.PickupPoint}  →  🔴 {order.DeliveryPoint}",
+                new Font("Segoe UI", 10f, FontStyle.Bold), TextDark, new Point(16, 10)));
+            infoPanel.Controls.Add(L(
+                $"📏  Distance: {route.TotalDistanceKm:N1} km   " +
+                $"⏱  ETA: {route.DurationMinutes:N0} min   " +
+                $"⛽  Fuel needed: {fuelNeeded:N1} L  (available: {driverFuel:N1} L)",
+                new Font("Segoe UI", 9.5f), TextGray, new Point(16, 38)));
+            dlg.Controls.Add(infoPanel);
+
+            // ── WebView2 map ──────────────────────────────────
+            var webView = new WebView2
+            {
+                Location = new Point(0, 70),
+                Size = new Size(900, 520)
+            };
+            dlg.Controls.Add(webView);
+
+            // ── Bottom confirm bar ────────────────────────────
+            var bottomPanel = new Panel
+            {
+                Location = new Point(0, 590),
+                Size = new Size(900, 90),
+                BackColor = Color.White
+            };
+
+            var btnConfirm = new Button
+            {
+                Text = "✅  Confirm Assignment",
+                Location = new Point(16, 24),
+                Size = new Size(220, 44),
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 11f, FontStyle.Bold),
+                BackColor = GreenOk,
+                ForeColor = Color.White,
+                Cursor = Cursors.Hand
+            };
+            btnConfirm.FlatAppearance.BorderSize = 0;
+
+            var btnCancel = new Button
+            {
+                Text = "✖  Cancel",
+                Location = new Point(250, 24),
+                Size = new Size(130, 44),
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 11f),
+                BackColor = CardBg,
+                ForeColor = TextDark,
+                Cursor = Cursors.Hand
+            };
+            btnCancel.FlatAppearance.BorderSize = 0;
+            btnCancel.Click += (s, e) => dlg.Close();
+
+            var lblConfirmStatus = new Label
+            {
+                Text = "",
+                Font = new Font("Segoe UI", 10f),
+                ForeColor = GreenOk,
+                AutoSize = true,
+                Location = new Point(400, 34)
+            };
+
+            bottomPanel.Controls.Add(btnConfirm);
+            bottomPanel.Controls.Add(btnCancel);
+            bottomPanel.Controls.Add(lblConfirmStatus);
+            dlg.Controls.Add(bottomPanel);
+
+            // ── Confirm click — save to DB ────────────────────
+            btnConfirm.Click += (s, e) =>
+            {
+                btnConfirm.Enabled = false;
+                bool assigned = _orderRepo.AssignVehicle(order.OrderID, vehicleID);
+                if (assigned)
+                {
+                    // Save ORS route data to DB
+                    _orderRepo.SaveRouteData(
+                        order.OrderID,
+                        route.PolylineJson,
+                        (decimal)route.TotalDistanceKm);
+
+                    lblConfirmStatus.ForeColor = GreenOk;
+                    lblConfirmStatus.Text = $"✅  Order #{order.OrderID} assigned to {driverName}!";
+
+                    // Close after short pause so admin sees the confirmation
+                    var t = new System.Windows.Forms.Timer { Interval = 1200 };
+                    t.Tick += (ts, te) =>
+                    {
+                        t.Stop();
+                        dlg.Close();
+                        RefreshAssign();
+                    };
+                    t.Start();
+                }
+                else
+                {
+                    lblConfirmStatus.ForeColor = RedAlert;
+                    lblConfirmStatus.Text = "❌  Assignment failed. Please try again.";
+                    btnConfirm.Enabled = true;
+                }
+            };
+
+            // ── Load WebView2 and render map ──────────────────
+            dlg.Load += async (s, e) =>
+            {
+                try
+                {
+                    await webView.EnsureCoreWebView2Async(null);
+                    webView.CoreWebView2.NavigateToString(
+                        BuildRouteMapHtml(route));
+                }
+                catch
+                {
+                    // WebView2 not installed — show text fallback
+                    webView.Visible = false;
+                    var fallback = new Label
+                    {
+                        Text = "⚠️  Map preview unavailable.\n" +
+                               "Install Microsoft Edge WebView2 Runtime for map support.\n\n" +
+                               $"Route: {order.PickupPoint}  →  {order.DeliveryPoint}\n" +
+                               $"Distance: {route.TotalDistanceKm:N1} km\n" +
+                               $"ETA: {route.DurationMinutes:N0} min",
+                        Font = new Font("Segoe UI", 11f),
+                        ForeColor = TextDark,
+                        Location = new Point(20, 80),
+                        AutoSize = true
+                    };
+                    dlg.Controls.Add(fallback);
+                }
+            };
+
+            dlg.ShowDialog(this);
+        }
+
+        // ─────────────────────────────────────────────────────────
+        //  BUILD LEAFLET MAP HTML
+        //  Self-contained HTML string. No files on disk needed.
+        //  Uses Leaflet.js from CDN (requires internet).
+        //  Draws:
+        //    • Blue polyline  — the optimal route
+        //    • Green marker   — Driver start / Pickup point
+        //    • Orange marker  — Pickup (if driver location known)
+        //    • Red marker     — Destination
+        //  No animation, no moving marker — static route only.
+        // ─────────────────────────────────────────────────────────
+        private static string BuildRouteMapHtml(Core.Services.RouteResult route)
+        {
+            // Convert polyline to JS array string: [[lat,lng],[lat,lng],...]
+            var sb = new System.Text.StringBuilder();
+            sb.Append("[");
+
+            if (route.Polyline != null && route.Polyline.Count > 0)
+            {
+                foreach (var pt in route.Polyline)
+                {
+                    // Fully aligned: pt[0] is Latitude, pt[1] is Longitude
+                    sb.Append($"[{pt[0].ToString(System.Globalization.CultureInfo.InvariantCulture)}," +
+                               $"{pt[1].ToString(System.Globalization.CultureInfo.InvariantCulture)}],");
+                }
+                if (sb.Length > 1) sb.Length--; // trim trailing comma
+            }
+            sb.Append("]");
+            string polylineJs = sb.ToString();
+
+            // Secure array reading to guarantee 3 distinct markers are generated without index bounds exception
+            double dLat = route.DriverCoords != null && route.DriverCoords.Length >= 2 ? route.DriverCoords[0] : route.PickupCoords[0];
+            double dLng = route.DriverCoords != null && route.DriverCoords.Length >= 2 ? route.DriverCoords[1] : route.PickupCoords[1];
+
+            double pLat = route.PickupCoords != null && route.PickupCoords.Length >= 2 ? route.PickupCoords[0] : dLat;
+            double pLng = route.PickupCoords != null && route.PickupCoords.Length >= 2 ? route.PickupCoords[1] : dLng;
+
+            double eLat = route.DestinCoords != null && route.DestinCoords.Length >= 2 ? route.DestinCoords[0] : pLat;
+            double eLng = route.DestinCoords != null && route.DestinCoords.Length >= 2 ? route.DestinCoords[1] : pLng;
+
+            // Centre map on midpoint of route
+            double cLat = (dLat + eLat) / 2.0;
+            double cLng = (dLng + eLng) / 2.0;
+
+            return $@"<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8'/>
+    <style>  
+        html,body,#map {{ height:100%; margin:0; padding:0; background-color: #f5f5f5; }}
+    </style>
+    <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>
+    <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
+</head>
+<body>
+    <div id='map'></div>
+    <script>  
+        // Center View initialized on Pakistan custom coordinates
+        var map = L.map('map').setView(
+            [{cLat.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {cLng.ToString(System.Globalization.CultureInfo.InvariantCulture)}], 
+            11
+        );  
+
+        // Forced HTTPS Leaflet Tile Servers Configuration
+        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 19
+        }}).addTo(map);  
+
+        // ── Optimal route polyline ──  
+        var coords = {polylineJs};  
+        
+        if(!coords || coords.length === 0) {{
+            coords = [
+                [{dLat.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {dLng.ToString(System.Globalization.CultureInfo.InvariantCulture)}],
+                [{pLat.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {pLng.ToString(System.Globalization.CultureInfo.InvariantCulture)}],
+                [{eLat.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {eLng.ToString(System.Globalization.CultureInfo.InvariantCulture)}]
+            ];
+        }}
+
+        var routeLine = L.polyline(coords, {{
+            color: '#0052CC',
+            weight: 6,
+            opacity: 0.85,
+            lineJoin: 'round'
+        }}).addTo(map);  
+
+        map.fitBounds(routeLine.getBounds(), {{ padding: [50, 50] }});  
+
+        // ── Driver / start marker (green) ──  
+        var driverIcon = L.divIcon({{
+            html: '<div style=""background:#22C55E;color:white;border-radius:50%;' +          
+                  'width:32px;height:32px;display:flex;align-items:center;' +          
+                  'justify-content:center;font-size:16px;border:2px solid white;' +          
+                  'box-shadow:0 2px 6px rgba(0,0,0,0.4)"">🚗</div>',
+            iconSize:[32,32], iconAnchor:[16,16]  
+        }});  
+        L.marker([{dLat.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {dLng.ToString(System.Globalization.CultureInfo.InvariantCulture)}], {{icon: driverIcon}})   
+         .addTo(map)   
+         .bindPopup('<b>Driver Start</b>');  
+
+        // ── Pickup marker (orange) ──  
+        var pickupIcon = L.divIcon({{
+            html: '<div style=""background:#FB923C;color:white;border-radius:50%;' +          
+                  'width:32px;height:32px;display:flex;align-items:center;' +          
+                  'justify-content:center;font-size:16px;border:2px solid white;' +          
+                  'box-shadow:0 2px 6px rgba(0,0,0,0.4)"">📦</div>',
+            iconSize:[32,32], iconAnchor:[16,16]  
+        }});  
+        L.marker([{pLat.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {pLng.ToString(System.Globalization.CultureInfo.InvariantCulture)}], {{icon: pickupIcon}})   
+         .addTo(map)   
+         .bindPopup('<b>Pickup Point</b>');  
+
+        // ── Destination marker (red) ──  
+        var destIcon = L.divIcon({{
+            html: '<div style=""background:#EF4444;color:white;border-radius:50%;' +          
+                  'width:32px;height:32px;display:flex;align-items:center;' +          
+                  'justify-content:center;font-size:16px;border:2px solid white;' +          
+                  'box-shadow:0 2px 6px rgba(0,0,0,0.4)"">📍</div>',
+            iconSize:[32,32], iconAnchor:[16,16]  
+        }});  
+        L.marker([{eLat.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {eLng.ToString(System.Globalization.CultureInfo.InvariantCulture)}], {{icon: destIcon}})   
+         .addTo(map)   
+         .bindPopup('<b>Delivery Destination</b>');
+    </script>
+</body>
+</html>";
         }
 
         // ═════════════════════════════════════════════════════════
@@ -1316,4 +1686,4 @@ namespace OptiRoute.Forms
             for (int i = 0; i < len; i++) yield return (a[i], b[i]);
         }
     }
-}
+} 

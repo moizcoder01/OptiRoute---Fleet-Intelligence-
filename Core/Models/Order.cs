@@ -41,6 +41,12 @@ namespace OptiRoute.Core.Models
         // ── Rating (1-5 stars, set by customer after delivery) ────
         public int Rating { get; set; } = 0;
 
+        public string? RoutePolyline { get; set; }
+        public decimal TotalRouteDistanceKm { get; set; }
+        public decimal DriverProgressKm { get; set; }
+        public double DriverCurrentLat { get; set; }
+        public double DriverCurrentLng { get; set; }
+
         // ── Timestamps ────────────────────────────────────────────
         public DateTime OrderDate { get; set; } = DateTime.Now;
         public DateTime? DeliveredAt { get; set; }

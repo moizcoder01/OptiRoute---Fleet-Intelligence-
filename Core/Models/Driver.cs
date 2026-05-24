@@ -21,6 +21,12 @@ namespace OptiRoute.Core.Models
         public bool IsAvailable { get; set; } = true;
         public bool NeedsMaintenance { get; set; } = false;
         public double CurrentFuel { get; set; } = 100.0;
+        public double CurrentLat { get; set; }
+        public double CurrentLng { get; set; }
+        public double TotalDistanceCoveredKm { get; set; }
+        public double DistanceSinceLastServiceKm { get; set; }
+        public double MaintenanceIntervalKm { get; set; } = 500;
+        public double MaintenancePct { get; set; } = 100;
 
         // ── Constructor ───────────────────────────────────────────
         public Driver()

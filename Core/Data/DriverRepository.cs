@@ -1,20 +1,26 @@
 ﻿// =============================================================
 //  OptiRoute  |  Core/Data/DriverRepository.cs
 //
-//  Schema:
+//  Schema (original + new columns from Step 1 ALTER statements):
 //    Table_Users    : UserID, FullName, FirstName, LastName,
-//                     Email, Phone, Username, Password, UserRole
+//                     Email, Phone, Username, Password, UserRole,
+//                     CurrentLat, CurrentLng              ← NEW
 //    Table_Drivers  : DriverID (FK→Users), Rating, LicenseNumber
 //    Table_Vehicles : VehicleID, DriverID (FK→Drivers), PlateNumber,
-//                     VehicleType, IsAvailable, NeedsMaintenance, CurrentFuel
-//    Table_Orders   : OrderID, CustomerID, VehicleID (FK→Vehicles),
-//                     ItemName, Weight, Priority, PickupPoint,
-//                     DeliveryPoint, TotalFare, PaymentStatus,
-//                     OrderStatus, OrderDate, Rating
-//    Table_OrderHistory : HistoryID, OrderID, CustomerID, ItemName,
-//                         Weight, Priority, PickupPoint, DeliveryPoint,
-//                         TotalFare, PaymentStatus, OrderDate,
-//                         DeliveredDate, Rating
+//                     VehicleType, IsAvailable, NeedsMaintenance,
+//                     CurrentFuel,
+//                     TotalDistanceCoveredKm              ← NEW
+//                     DistanceSinceLastServiceKm          ← NEW
+//                     MaintenanceIntervalKm               ← NEW
+//                     MaintenancePct (computed column)    ← NEW
+//    Table_Orders   : (unchanged in this file)
+//
+//  NEW methods in this version:
+//    LoadDriver()            — reads new vehicle columns
+//    IncrementDistance()     — called by driver timer every tick
+//    ResetMaintenance()      — called when vehicle is serviced
+//    GetMaintenanceStatus()  — admin uses this before assigning urgent orders
+//    UpdateNeedsMaintenance()— sets the NeedsMaintenance flag
 // =============================================================
 using System;
 using System.Collections.Generic;
@@ -26,12 +32,13 @@ namespace OptiRoute.Core.Data
 {
     public class DriverRepository
     {
-        // Uses DbConfig (NOT DatabaseHelper)
         private SqlConnection GetConnection()
             => new SqlConnection(DbConfig.ConnectionString);
 
         // ═════════════════════════════════════════════════════════
         //  LOAD DRIVER
+        //  Now also reads the four new vehicle maintenance columns
+        //  and the driver's last known GPS position from Table_Users.
         // ═════════════════════════════════════════════════════════
         public Driver? LoadDriver(string username)
         {
@@ -44,14 +51,20 @@ namespace OptiRoute.Core.Data
                     u.Phone,
                     u.Username,
                     u.UserRole,
-                    d.Rating          AS DriverRating,
+                    ISNULL(u.CurrentLat, 0)              AS CurrentLat,
+                    ISNULL(u.CurrentLng, 0)              AS CurrentLng,
+                    d.Rating                             AS DriverRating,
                     d.LicenseNumber,
                     v.VehicleID,
-                    ISNULL(v.PlateNumber,      'N/A')  AS PlateNumber,
-                    ISNULL(v.VehicleType,      'Bike') AS VehicleType,
-                    ISNULL(v.CurrentFuel,      100.0)  AS CurrentFuel,
-                    ISNULL(v.IsAvailable,      1)      AS IsAvailable,
-                    ISNULL(v.NeedsMaintenance, 0)      AS NeedsMaintenance
+                    ISNULL(v.PlateNumber,               'N/A')  AS PlateNumber,
+                    ISNULL(v.VehicleType,               'Bike') AS VehicleType,
+                    ISNULL(v.CurrentFuel,               100.0)  AS CurrentFuel,
+                    ISNULL(v.IsAvailable,               1)      AS IsAvailable,
+                    ISNULL(v.NeedsMaintenance,          0)      AS NeedsMaintenance,
+                    ISNULL(v.TotalDistanceCoveredKm,    0)      AS TotalDistanceCoveredKm,
+                    ISNULL(v.DistanceSinceLastServiceKm,0)      AS DistanceSinceLastServiceKm,
+                    ISNULL(v.MaintenanceIntervalKm,     500)    AS MaintenanceIntervalKm,
+                    ISNULL(v.MaintenancePct,            100)    AS MaintenancePct
                 FROM  Table_Users   u
                 INNER JOIN Table_Drivers  d ON d.DriverID = u.UserID
                 LEFT  JOIN Table_Vehicles v ON v.DriverID = d.DriverID
@@ -103,7 +116,7 @@ namespace OptiRoute.Core.Data
         }
 
         // ═════════════════════════════════════════════════════════
-        //  GET RECENT ASSIGNMENTS  (Dashboard home table, N rows)
+        //  GET RECENT ASSIGNMENTS  (Dashboard home table)
         // ═════════════════════════════════════════════════════════
         public List<Order> GetRecentAssignments(int driverId, int count = 7)
         {
@@ -370,6 +383,131 @@ namespace OptiRoute.Core.Data
         }
 
         // ═════════════════════════════════════════════════════════
+        //  NEW — INCREMENT DISTANCE  (called by Driver timer every tick)
+        //
+        //  Adds kmCovered to both distance columns and decrements fuel.
+        //  Also auto-sets NeedsMaintenance = 1 when DistanceSinceLastServiceKm
+        //  reaches or exceeds MaintenanceIntervalKm.
+        //
+        //  fuelRatePerKm: how many litres consumed per km.
+        //  Default 0.08 L/km is a reasonable estimate for a motorbike.
+        //  Adjust per VehicleType in the calling code if needed.
+        // ═════════════════════════════════════════════════════════
+        public bool IncrementDistance(int driverId, double kmCovered,
+                                       double fuelRatePerKm = 0.08)
+        {
+            const string sql = @"
+                UPDATE Table_Vehicles
+                SET
+                    TotalDistanceCoveredKm     = TotalDistanceCoveredKm     + @km,
+                    DistanceSinceLastServiceKm = DistanceSinceLastServiceKm + @km,
+                    CurrentFuel = CASE
+                                    WHEN CurrentFuel - (@km * @rate) < 0 THEN 0
+                                    ELSE CurrentFuel - (@km * @rate)
+                                  END,
+                    -- Auto-flag maintenance when interval is exceeded
+                    NeedsMaintenance = CASE
+                                         WHEN (DistanceSinceLastServiceKm + @km)
+                                              >= MaintenanceIntervalKm THEN 1
+                                         ELSE NeedsMaintenance
+                                       END
+                WHERE DriverID = @DriverID";
+
+            using var con = GetConnection();
+            using var cmd = new SqlCommand(sql, con);
+            cmd.Parameters.AddWithValue("@km", kmCovered);
+            cmd.Parameters.AddWithValue("@rate", fuelRatePerKm);
+            cmd.Parameters.AddWithValue("@DriverID", driverId);
+            con.Open();
+            return cmd.ExecuteNonQuery() > 0;
+        }
+
+        // ═════════════════════════════════════════════════════════
+        //  NEW — RESET MAINTENANCE  (called when vehicle is serviced)
+        //
+        //  Resets DistanceSinceLastServiceKm to 0 and clears the
+        //  NeedsMaintenance flag. TotalDistanceCoveredKm is never
+        //  reset — it's a lifetime odometer.
+        // ═════════════════════════════════════════════════════════
+        public bool ResetMaintenance(int driverId)
+        {
+            const string sql = @"
+                UPDATE Table_Vehicles
+                SET    DistanceSinceLastServiceKm = 0,
+                       NeedsMaintenance           = 0
+                WHERE  DriverID = @DriverID";
+
+            using var con = GetConnection();
+            using var cmd = new SqlCommand(sql, con);
+            cmd.Parameters.AddWithValue("@DriverID", driverId);
+            con.Open();
+            return cmd.ExecuteNonQuery() > 0;
+        }
+
+        // ═════════════════════════════════════════════════════════
+        //  NEW — GET MAINTENANCE STATUS  (Admin checks before assigning)
+        //
+        //  Returns a VehicleHealth object with all the maintenance
+        //  fields for a specific driver's vehicle.
+        //  Admin uses this to block urgent order assignment when
+        //  MaintenancePct < safetyThreshold (e.g. 20%).
+        // ═════════════════════════════════════════════════════════
+        public VehicleHealth? GetMaintenanceStatus(int driverId)
+        {
+            const string sql = @"
+                SELECT
+                    VehicleID,
+                    ISNULL(CurrentFuel,               100.0) AS CurrentFuel,
+                    ISNULL(TotalDistanceCoveredKm,    0)     AS TotalDistanceCoveredKm,
+                    ISNULL(DistanceSinceLastServiceKm,0)     AS DistanceSinceLastServiceKm,
+                    ISNULL(MaintenanceIntervalKm,     500)   AS MaintenanceIntervalKm,
+                    ISNULL(MaintenancePct,            100)   AS MaintenancePct,
+                    ISNULL(NeedsMaintenance,          0)     AS NeedsMaintenance
+                FROM  Table_Vehicles
+                WHERE DriverID = @DriverID";
+
+            using var con = GetConnection();
+            using var cmd = new SqlCommand(sql, con);
+            cmd.Parameters.AddWithValue("@DriverID", driverId);
+            con.Open();
+
+            using var rdr = cmd.ExecuteReader();
+            if (!rdr.Read()) return null;
+
+            return new VehicleHealth
+            {
+                VehicleID = Convert.ToInt32(rdr["VehicleID"]),
+                CurrentFuel = Convert.ToDouble(rdr["CurrentFuel"]),
+                TotalDistanceCoveredKm = Convert.ToDouble(rdr["TotalDistanceCoveredKm"]),
+                DistanceSinceLastServiceKm = Convert.ToDouble(rdr["DistanceSinceLastServiceKm"]),
+                MaintenanceIntervalKm = Convert.ToDouble(rdr["MaintenanceIntervalKm"]),
+                MaintenancePct = Convert.ToDouble(rdr["MaintenancePct"]),
+                NeedsMaintenance = Convert.ToBoolean(rdr["NeedsMaintenance"])
+            };
+        }
+
+        // ═════════════════════════════════════════════════════════
+        //  NEW — UPDATE NEEDS MAINTENANCE FLAG  (manual override)
+        //
+        //  Admin or system can manually set or clear this flag.
+        //  Normally it is set automatically by IncrementDistance().
+        // ═════════════════════════════════════════════════════════
+        public bool UpdateNeedsMaintenance(int driverId, bool needsMaintenance)
+        {
+            const string sql = @"
+                UPDATE Table_Vehicles
+                SET    NeedsMaintenance = @Flag
+                WHERE  DriverID = @DriverID";
+
+            using var con = GetConnection();
+            using var cmd = new SqlCommand(sql, con);
+            cmd.Parameters.AddWithValue("@Flag", needsMaintenance ? 1 : 0);
+            cmd.Parameters.AddWithValue("@DriverID", driverId);
+            con.Open();
+            return cmd.ExecuteNonQuery() > 0;
+        }
+
+        // ═════════════════════════════════════════════════════════
         //  PRIVATE HELPERS
         // ═════════════════════════════════════════════════════════
         private List<Order> Fetch(string sql, int driverId)
@@ -381,7 +519,7 @@ namespace OptiRoute.Core.Data
             con.Open();
             using var rdr = cmd.ExecuteReader();
             while (rdr.Read()) list.Add(MapOrder(rdr));
-            return list; 
+            return list;
         }
 
         private static Driver MapDriver(IDataRecord r) => new Driver
@@ -400,7 +538,15 @@ namespace OptiRoute.Core.Data
             CurrentFuel = r["CurrentFuel"] == DBNull.Value ? 100.0 : Convert.ToDouble(r["CurrentFuel"]),
             IsAvailable = r["IsAvailable"] != DBNull.Value && Convert.ToBoolean(r["IsAvailable"]),
             NeedsMaintenance = r["NeedsMaintenance"] != DBNull.Value && Convert.ToBoolean(r["NeedsMaintenance"]),
-            AverageRating = r["DriverRating"] == DBNull.Value ? 5.0 : Convert.ToDouble(r["DriverRating"])
+            AverageRating = r["DriverRating"] == DBNull.Value ? 5.0 : Convert.ToDouble(r["DriverRating"]),
+
+            // ── New maintenance fields ───────────────────────────
+            CurrentLat = r["CurrentLat"] == DBNull.Value ? 0 : Convert.ToDouble(r["CurrentLat"]),
+            CurrentLng = r["CurrentLng"] == DBNull.Value ? 0 : Convert.ToDouble(r["CurrentLng"]),
+            TotalDistanceCoveredKm = r["TotalDistanceCoveredKm"] == DBNull.Value ? 0 : Convert.ToDouble(r["TotalDistanceCoveredKm"]),
+            DistanceSinceLastServiceKm = r["DistanceSinceLastServiceKm"] == DBNull.Value ? 0 : Convert.ToDouble(r["DistanceSinceLastServiceKm"]),
+            MaintenanceIntervalKm = r["MaintenanceIntervalKm"] == DBNull.Value ? 500 : Convert.ToDouble(r["MaintenanceIntervalKm"]),
+            MaintenancePct = r["MaintenancePct"] == DBNull.Value ? 100 : Convert.ToDouble(r["MaintenancePct"])
         };
 
         private static Order MapOrder(IDataRecord r) => new Order
@@ -434,5 +580,23 @@ namespace OptiRoute.Core.Data
         public int Pending { get; set; }
         public int Returned { get; set; }
         public int TotalRatings { get; set; }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    //  VehicleHealth — returned by GetMaintenanceStatus()
+    //  Admin reads this before assigning urgent orders.
+    // ─────────────────────────────────────────────────────────
+    public class VehicleHealth
+    {
+        public int VehicleID { get; set; }
+        public double CurrentFuel { get; set; }
+        public double TotalDistanceCoveredKm { get; set; }
+        public double DistanceSinceLastServiceKm { get; set; }
+        public double MaintenanceIntervalKm { get; set; }
+        public double MaintenancePct { get; set; }
+        public bool NeedsMaintenance { get; set; }
+
+        // True if safe to assign an urgent order (above 20% threshold)
+        public bool IsSafeForUrgent => MaintenancePct >= 20.0;
     }
 }
