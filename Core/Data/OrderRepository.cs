@@ -2,10 +2,13 @@
 //  OptiRoute  |  Core/Data/OrderRepository.cs
 //  All SQL for Table_Orders — no UI code ever goes here
 //
-//  NEW in this version (map integration):
-//    SaveRouteData()         — saves ORS polyline + distance at assign time
-//    UpdateDriverProgress()  — driver timer calls this every tick
-//    GetRouteData()          — driver/customer dashboards read polyline from DB
+//  CHANGES FROM ORIGINAL:
+//    + AssignVehicleWithRoute() — saves VehicleID, RouteDistance,
+//      RoutePolyline, sets status 'Assigned' in one UPDATE.
+//      Called by AdminDashboardForm after OSRM route is fetched.
+//    + GetRoutePolyline()      — reads RoutePolyline for a given
+//      OrderID so DriverDashboard / CustomerDashboard can re-render
+//      the Leaflet map without re-calling OSRM.
 // =============================================================
 using System;
 using System.Collections.Generic;
@@ -69,17 +72,11 @@ namespace OptiRoute.Core.Data
                 var cmd = new SqlCommand(
                     @"SELECT o.OrderID, o.CustomerID,
                              v.DriverID,
-                             ISNULL(o.VehicleID, 0)          AS VehicleID,
+                             ISNULL(o.VehicleID, 0) AS VehicleID,
                              o.ItemName, o.Weight, o.Priority,
                              o.PickupPoint, o.DeliveryPoint, o.OrderStatus,
                              o.TotalFare, o.PaymentStatus,
-                             ISNULL(o.Rating, 0)             AS Rating,
-                             o.OrderDate,
-                             o.RoutePolyline,
-                             ISNULL(o.TotalRouteDistanceKm, 0) AS TotalRouteDistanceKm,
-                             ISNULL(o.DriverProgressKm, 0)     AS DriverProgressKm,
-                             o.DriverCurrentLat,
-                             o.DriverCurrentLng
+                             ISNULL(o.Rating, 0) AS Rating, o.OrderDate
                       FROM   Table_Orders o
                       LEFT   JOIN Table_Vehicles v ON v.VehicleID = o.VehicleID
                       WHERE  o.CustomerID = @cid
@@ -105,17 +102,11 @@ namespace OptiRoute.Core.Data
                     $@"SELECT TOP {top}
                               o.OrderID, o.CustomerID,
                               v.DriverID,
-                              ISNULL(o.VehicleID, 0)           AS VehicleID,
+                              ISNULL(o.VehicleID, 0) AS VehicleID,
                               o.ItemName, o.Weight, o.Priority,
                               o.PickupPoint, o.DeliveryPoint, o.OrderStatus,
                               o.TotalFare, o.PaymentStatus,
-                              ISNULL(o.Rating, 0)              AS Rating,
-                              o.OrderDate,
-                              o.RoutePolyline,
-                              ISNULL(o.TotalRouteDistanceKm, 0) AS TotalRouteDistanceKm,
-                              ISNULL(o.DriverProgressKm, 0)     AS DriverProgressKm,
-                              o.DriverCurrentLat,
-                              o.DriverCurrentLng
+                              ISNULL(o.Rating, 0) AS Rating, o.OrderDate
                        FROM   Table_Orders o
                        LEFT   JOIN Table_Vehicles v ON v.VehicleID = o.VehicleID
                        WHERE  o.CustomerID = @cid
@@ -169,54 +160,16 @@ namespace OptiRoute.Core.Data
                 var cmd = new SqlCommand(
                     @"SELECT o.OrderID, o.CustomerID,
                              v.DriverID,
-                             ISNULL(o.VehicleID, 0)           AS VehicleID,
+                             ISNULL(o.VehicleID, 0) AS VehicleID,
                              o.ItemName, o.Weight, o.Priority,
                              o.PickupPoint, o.DeliveryPoint, o.OrderStatus,
                              o.TotalFare, o.PaymentStatus,
-                             ISNULL(o.Rating, 0)              AS Rating,
-                             o.OrderDate,
-                             o.RoutePolyline,
-                             ISNULL(o.TotalRouteDistanceKm, 0) AS TotalRouteDistanceKm,
-                             ISNULL(o.DriverProgressKm, 0)     AS DriverProgressKm,
-                             o.DriverCurrentLat,
-                             o.DriverCurrentLng
+                             ISNULL(o.Rating, 0) AS Rating, o.OrderDate
                       FROM   Table_Orders o
                       LEFT   JOIN Table_Vehicles v ON v.VehicleID = o.VehicleID
                       WHERE  o.OrderID = @id AND o.CustomerID = @cid", conn);
                 cmd.Parameters.AddWithValue("@id", orderID);
                 cmd.Parameters.AddWithValue("@cid", customerID);
-
-                using var r = cmd.ExecuteReader();
-                return r.Read() ? MapOrder(r) : null;
-            }
-            catch { return null; }
-        }
-
-        // ── GET ORDER BY ID ONLY (for driver tracking, no customerID guard) ──
-        public Order? GetByID(int orderID)
-        {
-            try
-            {
-                using var conn = new SqlConnection(_cs);
-                conn.Open();
-                var cmd = new SqlCommand(
-                    @"SELECT o.OrderID, o.CustomerID,
-                             v.DriverID,
-                             ISNULL(o.VehicleID, 0)           AS VehicleID,
-                             o.ItemName, o.Weight, o.Priority,
-                             o.PickupPoint, o.DeliveryPoint, o.OrderStatus,
-                             o.TotalFare, o.PaymentStatus,
-                             ISNULL(o.Rating, 0)              AS Rating,
-                             o.OrderDate,
-                             o.RoutePolyline,
-                             ISNULL(o.TotalRouteDistanceKm, 0) AS TotalRouteDistanceKm,
-                             ISNULL(o.DriverProgressKm, 0)     AS DriverProgressKm,
-                             o.DriverCurrentLat,
-                             o.DriverCurrentLng
-                      FROM   Table_Orders o
-                      LEFT   JOIN Table_Vehicles v ON v.VehicleID = o.VehicleID
-                      WHERE  o.OrderID = @id", conn);
-                cmd.Parameters.AddWithValue("@id", orderID);
 
                 using var r = cmd.ExecuteReader();
                 return r.Read() ? MapOrder(r) : null;
@@ -272,7 +225,7 @@ namespace OptiRoute.Core.Data
             catch { return false; }
         }
 
-        // ── UPDATE ORDER STATUS (admin / driver actions) ──────────
+        // ── UPDATE ORDER STATUS ───────────────────────────────────
         public bool UpdateStatus(int orderID, string newStatus)
         {
             try
@@ -289,7 +242,11 @@ namespace OptiRoute.Core.Data
             catch { return false; }
         }
 
-        // ── ASSIGN VEHICLE TO ORDER ───────────────────────────────
+        // ── ASSIGN VEHICLE (original — no route data) ─────────────
+        /// <summary>
+        /// Links a VehicleID to an order and sets status to 'Assigned'.
+        /// Used when route calculation is skipped or already stored.
+        /// </summary>
         public bool AssignVehicle(int orderID, int vehicleID)
         {
             try
@@ -309,7 +266,109 @@ namespace OptiRoute.Core.Data
             catch { return false; }
         }
 
-        // ── ASSIGN DRIVER (legacy helper) ─────────────────────────
+        // ── ASSIGN VEHICLE WITH ROUTE DATA (NEW) ──────────────────
+        /// <summary>
+        /// Assigns a vehicle AND saves OSRM route data in one UPDATE.
+        /// Called by AdminDashboardForm after RouteService.GetRouteAsync().
+        ///
+        /// Parameters:
+        ///   orderID       — the order being assigned
+        ///   vehicleID     — the driver's vehicle
+        ///   routeDistKm   — real road distance from OSRM (km)
+        ///   routePolyline — JSON [[lat,lng],...] from OSRM for Leaflet rendering
+        /// </summary>
+        public bool AssignVehicleWithRoute(int orderID, int vehicleID,
+                                           double routeDistKm, string routePolyline)
+        {
+            try
+            {
+                using var conn = new SqlConnection(_cs);
+                conn.Open();
+                var cmd = new SqlCommand(
+                    @"UPDATE Table_Orders
+                      SET VehicleID      = @vid,
+                          OrderStatus    = 'Assigned',
+                          RouteDistance  = @dist,
+                          RoutePolyline  = @poly
+                      WHERE OrderID = @id", conn);
+                cmd.Parameters.AddWithValue("@vid", vehicleID);
+                cmd.Parameters.AddWithValue("@dist", routeDistKm);
+                cmd.Parameters.AddWithValue("@poly", routePolyline);
+                cmd.Parameters.AddWithValue("@id", orderID);
+                cmd.ExecuteNonQuery();
+                return true;
+            }
+            catch { return false; }
+        }
+        
+
+        // ── SAVE ROUTE DATA (called after AssignVehicle, saves polyline + distance) ──
+        public bool SaveRouteData(int orderID, string polylineJson, decimal totalDistanceKm)
+        {
+            try
+            {
+                using var conn = new SqlConnection(_cs);
+                conn.Open();
+                var cmd = new SqlCommand(
+                    @"UPDATE Table_Orders
+                      SET RoutePolyline = @polyline,
+                          RouteDistance = @dist
+                      WHERE OrderID = @id", conn);
+                cmd.Parameters.AddWithValue("@polyline", polylineJson);
+                cmd.Parameters.AddWithValue("@dist", (double)totalDistanceKm);
+                cmd.Parameters.AddWithValue("@id", orderID);
+                return cmd.ExecuteNonQuery() > 0;
+            }
+            catch { return false; }
+        }
+
+        // ── GET ROUTE POLYLINE FOR AN ORDER ───────────────────────
+
+        // ── GET ROUTE POLYLINE FOR AN ORDER (NEW) ─────────────────
+        /// <summary>
+        /// Returns the stored RoutePolyline JSON string for an order.
+        /// Used by DriverDashboard and CustomerDashboard to render the
+        /// Leaflet map without re-calling OSRM.
+        /// Returns null if not yet set (order not assigned or OSRM failed).
+        /// </summary>
+        public string? GetRoutePolyline(int orderID)
+        {
+            try
+            {
+                using var conn = new SqlConnection(_cs);
+                conn.Open();
+                var cmd = new SqlCommand(
+                    "SELECT RoutePolyline FROM Table_Orders WHERE OrderID = @id", conn);
+                cmd.Parameters.AddWithValue("@id", orderID);
+                var result = cmd.ExecuteScalar();
+                if (result == null || result == DBNull.Value) return null;
+                return result.ToString();
+            }
+            catch { return null; }
+        }
+
+        // ── GET ROUTE DISTANCE FOR AN ORDER (NEW) ─────────────────
+        /// <summary>
+        /// Returns the stored RouteDistance (km) for an order.
+        /// Used for fuel burn calculation on DriverDashboard.
+        /// Returns 0 if not yet set.
+        /// </summary>
+        public double GetRouteDistance(int orderID)
+        {
+            try
+            {
+                using var conn = new SqlConnection(_cs);
+                conn.Open();
+                var cmd = new SqlCommand(
+                    "SELECT ISNULL(RouteDistance, 0) FROM Table_Orders WHERE OrderID = @id", conn);
+                cmd.Parameters.AddWithValue("@id", orderID);
+                var result = cmd.ExecuteScalar();
+                return result != null ? Convert.ToDouble(result) : 0.0;
+            }
+            catch { return 0.0; }
+        }
+
+        // ── ASSIGN DRIVER (legacy — kept for compatibility) ────────
         public bool AssignDriver(int orderID, int driverID)
         {
             try
@@ -351,13 +410,7 @@ namespace OptiRoute.Core.Data
                              o.ItemName, o.Weight, o.Priority,
                              o.PickupPoint, o.DeliveryPoint, o.OrderStatus,
                              o.TotalFare, o.PaymentStatus,
-                             ISNULL(o.Rating, 0)              AS Rating,
-                             o.OrderDate,
-                             o.RoutePolyline,
-                             ISNULL(o.TotalRouteDistanceKm, 0) AS TotalRouteDistanceKm,
-                             ISNULL(o.DriverProgressKm, 0)     AS DriverProgressKm,
-                             o.DriverCurrentLat,
-                             o.DriverCurrentLng
+                             ISNULL(o.Rating, 0) AS Rating, o.OrderDate
                       FROM   Table_Orders   o
                       INNER  JOIN Table_Vehicles v ON v.VehicleID = o.VehicleID
                       WHERE  v.DriverID = @did
@@ -382,18 +435,12 @@ namespace OptiRoute.Core.Data
                 conn.Open();
                 var cmd = new SqlCommand(
                     @"SELECT o.OrderID, o.CustomerID,
-                             NULL                              AS DriverID,
-                             ISNULL(o.VehicleID, 0)           AS VehicleID,
+                             NULL AS DriverID,
+                             ISNULL(o.VehicleID, 0) AS VehicleID,
                              o.ItemName, o.Weight, o.Priority,
                              o.PickupPoint, o.DeliveryPoint, o.OrderStatus,
                              o.TotalFare, o.PaymentStatus,
-                             ISNULL(o.Rating, 0)              AS Rating,
-                             o.OrderDate,
-                             o.RoutePolyline,
-                             ISNULL(o.TotalRouteDistanceKm, 0) AS TotalRouteDistanceKm,
-                             ISNULL(o.DriverProgressKm, 0)     AS DriverProgressKm,
-                             o.DriverCurrentLat,
-                             o.DriverCurrentLng
+                             ISNULL(o.Rating, 0) AS Rating, o.OrderDate
                       FROM   Table_Orders o
                       WHERE  o.OrderStatus = 'Pending'
                       ORDER  BY o.Priority DESC, o.OrderDate ASC", conn);
@@ -415,18 +462,12 @@ namespace OptiRoute.Core.Data
                 conn.Open();
                 var cmd = new SqlCommand(
                     @"SELECT o.OrderID, o.CustomerID,
-                             NULL                              AS DriverID,
-                             ISNULL(o.VehicleID, 0)           AS VehicleID,
+                             NULL AS DriverID,
+                             ISNULL(o.VehicleID, 0) AS VehicleID,
                              o.ItemName, o.Weight, o.Priority,
                              o.PickupPoint, o.DeliveryPoint, o.OrderStatus,
                              o.TotalFare, o.PaymentStatus,
-                             ISNULL(o.Rating, 0)              AS Rating,
-                             o.OrderDate,
-                             o.RoutePolyline,
-                             ISNULL(o.TotalRouteDistanceKm, 0) AS TotalRouteDistanceKm,
-                             ISNULL(o.DriverProgressKm, 0)     AS DriverProgressKm,
-                             o.DriverCurrentLat,
-                             o.DriverCurrentLng
+                             ISNULL(o.Rating, 0) AS Rating, o.OrderDate
                       FROM   Table_Orders o
                       ORDER  BY o.OrderDate DESC", conn);
 
@@ -447,18 +488,12 @@ namespace OptiRoute.Core.Data
                 conn.Open();
                 var cmd = new SqlCommand(
                     @"SELECT o.OrderID, o.CustomerID,
-                             NULL                              AS DriverID,
-                             ISNULL(o.VehicleID, 0)           AS VehicleID,
+                             NULL AS DriverID,
+                             ISNULL(o.VehicleID, 0) AS VehicleID,
                              o.ItemName, o.Weight, o.Priority,
                              o.PickupPoint, o.DeliveryPoint, o.OrderStatus,
                              o.TotalFare, o.PaymentStatus,
-                             ISNULL(o.Rating, 0)              AS Rating,
-                             o.OrderDate,
-                             o.RoutePolyline,
-                             ISNULL(o.TotalRouteDistanceKm, 0) AS TotalRouteDistanceKm,
-                             ISNULL(o.DriverProgressKm, 0)     AS DriverProgressKm,
-                             o.DriverCurrentLat,
-                             o.DriverCurrentLng
+                             ISNULL(o.Rating, 0) AS Rating, o.OrderDate
                       FROM   Table_Orders o
                       WHERE  o.OrderStatus = @Status
                       ORDER  BY o.OrderDate DESC", conn);
@@ -500,130 +535,6 @@ namespace OptiRoute.Core.Data
             return (0m, 0, 0, 0);
         }
 
-        // ═════════════════════════════════════════════════════════
-        //  NEW — SAVE ROUTE DATA  (called by Admin after ORS returns)
-        //
-        //  Called once at assignment time. Saves:
-        //    • RoutePolyline          — JSON coordinate array from ORS
-        //    • TotalRouteDistanceKm   — total of both legs (Driver→Pickup + Pickup→Dest)
-        //  DriverProgressKm starts at 0 automatically (DB default).
-        // ═════════════════════════════════════════════════════════
-        public bool SaveRouteData(int orderID, string polylineJson, decimal totalDistanceKm)
-        {
-            try
-            {
-                using var conn = new SqlConnection(_cs);
-                conn.Open();
-                var cmd = new SqlCommand(
-                    @"UPDATE Table_Orders
-                      SET RoutePolyline        = @polyline,
-                          TotalRouteDistanceKm = @dist,
-                          DriverProgressKm     = 0
-                      WHERE OrderID = @id", conn);
-                cmd.Parameters.AddWithValue("@polyline", polylineJson);
-                cmd.Parameters.AddWithValue("@dist", totalDistanceKm);
-                cmd.Parameters.AddWithValue("@id", orderID);
-                return cmd.ExecuteNonQuery() > 0;
-            }
-            catch { return false; }
-        }
-
-        // ═════════════════════════════════════════════════════════
-        //  NEW — UPDATE DRIVER PROGRESS  (called by Driver timer every tick)
-        //
-        //  Updates:
-        //    • DriverProgressKm   — how far the driver has covered so far
-        //    • DriverCurrentLat   — driver's current latitude
-        //    • DriverCurrentLng   — driver's current longitude
-        //
-        //  Also updates Table_Users.CurrentLat / CurrentLng so Admin
-        //  can use the driver's live position as the route start point
-        //  for any future assignment.
-        // ═════════════════════════════════════════════════════════
-        public bool UpdateDriverProgress(int orderID, int driverUserID,
-            double progressKm, double currentLat, double currentLng)
-        {
-            try
-            {
-                using var conn = new SqlConnection(_cs);
-                conn.Open();
-
-                // Update order progress + live position
-                var cmdOrder = new SqlCommand(
-                    @"UPDATE Table_Orders
-                      SET DriverProgressKm = @prog,
-                          DriverCurrentLat = @lat,
-                          DriverCurrentLng = @lng
-                      WHERE OrderID = @id", conn);
-                cmdOrder.Parameters.AddWithValue("@prog", progressKm);
-                cmdOrder.Parameters.AddWithValue("@lat", currentLat);
-                cmdOrder.Parameters.AddWithValue("@lng", currentLng);
-                cmdOrder.Parameters.AddWithValue("@id", orderID);
-                cmdOrder.ExecuteNonQuery();
-
-                // Keep Table_Users current position in sync
-                var cmdUser = new SqlCommand(
-                    @"UPDATE Table_Users
-                      SET CurrentLat = @lat,
-                          CurrentLng = @lng
-                      WHERE UserID = @uid", conn);
-                cmdUser.Parameters.AddWithValue("@lat", currentLat);
-                cmdUser.Parameters.AddWithValue("@lng", currentLng);
-                cmdUser.Parameters.AddWithValue("@uid", driverUserID);
-                cmdUser.ExecuteNonQuery();
-
-                return true;
-            }
-            catch { return false; }
-        }
-
-        // ═════════════════════════════════════════════════════════
-        //  NEW — GET ROUTE DATA  (called by Customer tracking map)
-        //
-        //  Returns only the route-specific fields for a given order —
-        //  lightweight, no joins needed.
-        //  Returns null if the order has no route saved yet.
-        // ═════════════════════════════════════════════════════════
-        public RouteData? GetRouteData(int orderID)
-        {
-            try
-            {
-                using var conn = new SqlConnection(_cs);
-                conn.Open();
-                var cmd = new SqlCommand(
-                    @"SELECT OrderStatus,
-                             RoutePolyline,
-                             ISNULL(TotalRouteDistanceKm, 0) AS TotalRouteDistanceKm,
-                             ISNULL(DriverProgressKm,     0) AS DriverProgressKm,
-                             DriverCurrentLat,
-                             DriverCurrentLng
-                      FROM   Table_Orders
-                      WHERE  OrderID = @id", conn);
-                cmd.Parameters.AddWithValue("@id", orderID);
-
-                using var r = cmd.ExecuteReader();
-                if (!r.Read()) return null;
-
-                string? polyline = r["RoutePolyline"] == DBNull.Value
-                    ? null : r["RoutePolyline"].ToString();
-
-                if (string.IsNullOrEmpty(polyline)) return null;
-
-                return new RouteData
-                {
-                    OrderStatus = r["OrderStatus"]?.ToString() ?? "Pending",
-                    PolylineJson = polyline,
-                    TotalRouteDistanceKm = Convert.ToDecimal(r["TotalRouteDistanceKm"]),
-                    DriverProgressKm = Convert.ToDecimal(r["DriverProgressKm"]),
-                    DriverCurrentLat = r["DriverCurrentLat"] == DBNull.Value
-                                            ? 0 : Convert.ToDouble(r["DriverCurrentLat"]),
-                    DriverCurrentLng = r["DriverCurrentLng"] == DBNull.Value
-                                            ? 0 : Convert.ToDouble(r["DriverCurrentLng"])
-                };
-            }
-            catch { return null; }
-        }
-
         // ── PRIVATE MAPPER ────────────────────────────────────────
         private static Order MapOrder(SqlDataReader r)
         {
@@ -650,40 +561,9 @@ namespace OptiRoute.Core.Data
                 TotalFare = r["TotalFare"] != DBNull.Value ? Convert.ToDecimal(r["TotalFare"]) : 0m,
                 PaymentStatus = r["PaymentStatus"]?.ToString() ?? "Unpaid",
                 Rating = r["Rating"] != DBNull.Value ? Convert.ToInt32(r["Rating"]) : 0,
-                OrderDate = r["OrderDate"] != DBNull.Value ? Convert.ToDateTime(r["OrderDate"]) : DateTime.Now,
-
-                // ── Route fields (new) ──────────────────────────
-                RoutePolyline = r["RoutePolyline"] == DBNull.Value
-                                         ? null : r["RoutePolyline"]?.ToString(),
-                TotalRouteDistanceKm = r["TotalRouteDistanceKm"] != DBNull.Value
-                                         ? Convert.ToDecimal(r["TotalRouteDistanceKm"]) : 0m,
-                DriverProgressKm = r["DriverProgressKm"] != DBNull.Value
-                                         ? Convert.ToDecimal(r["DriverProgressKm"]) : 0m,
-                DriverCurrentLat = r["DriverCurrentLat"] == DBNull.Value
-                                         ? 0 : Convert.ToDouble(r["DriverCurrentLat"]),
-                DriverCurrentLng = r["DriverCurrentLng"] == DBNull.Value
-                                         ? 0 : Convert.ToDouble(r["DriverCurrentLng"])
+                OrderDate = r["OrderDate"] != DBNull.Value
+                                    ? Convert.ToDateTime(r["OrderDate"]) : DateTime.Now
             };
         }
-    }
-
-    // ─────────────────────────────────────────────────────────
-    //  RouteData — lightweight container for tracking map reads
-    //  Returned by GetRouteData() — no need to load full Order.
-    // ─────────────────────────────────────────────────────────
-    public class RouteData
-    {
-        public string OrderStatus { get; set; } = "Pending";
-        public string PolylineJson { get; set; } = "";
-        public decimal TotalRouteDistanceKm { get; set; }
-        public decimal DriverProgressKm { get; set; }
-        public double DriverCurrentLat { get; set; }
-        public double DriverCurrentLng { get; set; }
-
-        // Convenience: progress as 0.0–1.0 fraction
-        public double ProgressFraction =>
-            TotalRouteDistanceKm > 0
-                ? Math.Min(1.0, (double)(DriverProgressKm / TotalRouteDistanceKm))
-                : 0;
     }
 }
