@@ -8,7 +8,7 @@ namespace OptiRoute.Core.Data
     public static class DbConfig
     {
         // ── Change ONLY this value when deploying to Laptop B ─────
-        private const string Server = @"LAPTPO\SQLEXPRESS";
+        private const string Server = @"TASMIYA\SQLEXPRESS";
         private const string Database = "OptiRoute";
 
         public static string ConnectionString =>

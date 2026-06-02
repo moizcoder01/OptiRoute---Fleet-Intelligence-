@@ -196,7 +196,7 @@ namespace OptiRoute.Forms
             try
             {
                 picLogo.Image = Image.FromFile(
-                    @"C:\Users\dell\Downloads\optiroute_logo.jpeg");
+                    @"C:\Users\HP\Downloads\Project logo.png");
             }
             catch
             {

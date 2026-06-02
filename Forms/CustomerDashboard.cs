@@ -20,6 +20,13 @@
 //      via Table_Orders.VehicleID.
 //    • BuildCustomerMapHtml gains a vehicleType parameter.
 //
+//  STEP 8 ADDITIONS (zero theme / style changes):
+//    • Payment ComboBox replaced with amber highlighted note
+//      panel — only Cash on Delivery is accepted.
+//    • Prohibited item check added to Place Order flow.
+//      Orders containing weapons, drugs, human remains, or
+//      other dangerous goods are rejected before DB insert.
+//
 //  ARCHITECTURE : Zero SQL in this file except the one
 //                 lightweight helper GetVehicleTypeForOrder().
 //  THEME        : 100 % preserved.
@@ -367,7 +374,6 @@ namespace OptiRoute.Forms
         {
             var c = Card(x, y, w, h);
 
-            // Accent strip — animates height 5→8 and shimmers on hover
             bool stripHovered = false;
             var strip = new Panel { Location = new Point(0, 0), Size = new Size(w, 5), BackColor = accent };
             strip.Paint += (s, e) =>
@@ -380,7 +386,6 @@ namespace OptiRoute.Forms
             c.Controls.Add(L(title, new Font("Segoe UI", 10f), TextGray, new Point(16, 62)));
             c.Controls.Add(L(value, new Font("Segoe UI", 20, FontStyle.Bold), accent, new Point(16, 82)));
 
-            // Propagate hover + animate strip
             Action<bool>? trigger = c.Tag as Action<bool>;
             Action<bool> hoverAll = (on) =>
             {
@@ -440,7 +445,6 @@ namespace OptiRoute.Forms
                 Color sc = o.OrderStatus == "Delivered" ? GreenOk : o.OrderStatus == "Picked" ? OrangeWarn : o.OrderStatus == "Assigned" ? RoyalBlue : TextGray;
                 var card = Card(30, cardY, cardW, cardH);
 
-                // Accent strip with hover brighten
                 bool stripHov = false;
                 var strip = new Panel { Location = new Point(0, 0), Size = new Size(cardW, 5), BackColor = sc };
                 strip.Paint += (s, e) =>
@@ -523,7 +527,6 @@ namespace OptiRoute.Forms
                 btnCancel.MouseLeave += (s, e) => { var pos = card.PointToClient(Control.MousePosition); if (!card.ClientRectangle.Contains(pos)) hoverAll(false); };
                 card.Controls.Add(btnCancel);
 
-                // Propagate hover to all remaining children
                 foreach (Control ch in card.Controls)
                 {
                     ch.MouseEnter += (s, e) => hoverAll(true);
@@ -577,7 +580,6 @@ namespace OptiRoute.Forms
             lblMapHint.Location = new Point((mapW - lblMapHint.PreferredWidth) / 2, (contentH - 22) / 2);
             mapPanel.Controls.Add(lblMapHint);
 
-            // Keep panels filling available space on resize
             pnlTrackOrder.SizeChanged += (s, e) =>
             {
                 int newMapW = pnlTrackOrder.Width - mapLeft - 20;
@@ -646,7 +648,6 @@ namespace OptiRoute.Forms
                     sy += 50;
                 }
 
-                // Live tracking hint
                 var liveLabel = new Label { Text = "", Font = new Font("Segoe UI", 9f, FontStyle.Bold), ForeColor = OrangeWarn, BackColor = Color.Transparent, AutoSize = true, Location = new Point(16, sy + 10) };
                 statusCard.Controls.Add(liveLabel);
 
@@ -661,7 +662,6 @@ namespace OptiRoute.Forms
                 string? polylineJson = _orderRepo.GetRoutePolyline(oid);
                 double distKm = _orderRepo.GetRouteDistance(oid);
 
-                // Get latest telemetry for initial truck position
                 var latestTel = _telRepo.GetLatest(oid);
                 double truckLat = latestTel?.Latitude ?? 0;
                 double truckLng = latestTel?.Longitude ?? 0;
@@ -685,7 +685,6 @@ namespace OptiRoute.Forms
                         string html = BuildCustomerMapHtml(order, polylineJson ?? "[]", distKm, truckLat, truckLng, order.PickupPoint, order.DeliveryPoint, _trackedVehicleType);
                         _trackMapView.CoreWebView2.NavigateToString(html);
 
-                        // Start polling only for in-transit orders
                         if (order.OrderStatus == "Picked")
                             StartPollTimer();
                     };
@@ -731,7 +730,6 @@ namespace OptiRoute.Forms
         {
             if (_trackedOrderId <= 0) { StopPollTimer(); return; }
 
-            // Check if order is still in transit
             Order? current = _orderRepo.GetByID(_trackedOrderId, _customer.UserID);
             if (current == null || current.OrderStatus == "Delivered" || current.OrderStatus == "Returned")
             {
@@ -741,12 +739,10 @@ namespace OptiRoute.Forms
                 return;
             }
 
-            // Get latest telemetry
             var tel = _telRepo.GetLatest(_trackedOrderId);
-            if (tel == null || tel.TID == _lastTelTID) return; // nothing new
+            if (tel == null || tel.TID == _lastTelTID) return;
             _lastTelTID = tel.TID;
 
-            // Move pin in Leaflet
             if (_trackMapReady && _trackMapView != null && !_trackMapView.IsDisposed)
             {
                 string latStr = tel.Latitude.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
@@ -771,9 +767,6 @@ namespace OptiRoute.Forms
 
         // ─────────────────────────────────────────────────────────
         //  VEHICLE TYPE FOR ORDER
-        //  Reads VehicleType from Table_Vehicles joined via the
-        //  VehicleID stored on Table_Orders.  Returns "Truck" on
-        //  any error so the map always has a valid icon.
         // ─────────────────────────────────────────────────────────
         private static string GetVehicleTypeForOrder(int orderId)
         {
@@ -811,7 +804,6 @@ namespace OptiRoute.Forms
             string fmt(double v) => v.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
             string vehicleEmoji = GetVehicleEmoji(vehicleType);
 
-            // Parse first and last waypoints for pickup / delivery markers
             double pickLat = truckLat, pickLng = truckLng;
             double delLat = truckLat, delLng = truckLng;
             try
@@ -830,7 +822,6 @@ namespace OptiRoute.Forms
             double centLat = (pickLat + delLat) / 2.0;
             double centLng = (pickLng + delLng) / 2.0;
 
-            // If no telemetry yet, place truck at pickup
             if (truckLat == 0 && truckLng == 0) { truckLat = pickLat; truckLng = pickLng; }
 
             return $@"<!DOCTYPE html>
@@ -872,27 +863,22 @@ L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{
   maxZoom:19,attribution:'© OpenStreetMap'
 }}).addTo(map);
 
-// Route polyline
 var pts = {polylineJson};
 if(pts&&pts.length>1){{
   var rt = L.polyline(pts,{{color:'#0052cc',weight:5,opacity:.8}}).addTo(map);
   map.fitBounds(rt.getBounds(),{{padding:[40,40]}});
 }}
 
-// Pickup marker (package emoji icon)
 var gIcon = L.divIcon({{className:'',html:'<div style=""font-size:26px;line-height:1;filter:drop-shadow(0 2px 4px rgba(0,0,0,.45))"">📦</div>',iconSize:[30,30],iconAnchor:[15,28]}});
 L.marker([{fmt(pickLat)},{fmt(pickLng)}],{{icon:gIcon}}).addTo(map).bindPopup('<b>📦 Pickup</b><br>{EscHtml(pickupLabel)}');
 
-// Delivery marker (flag emoji icon)
 var rIcon = L.divIcon({{className:'',html:'<div style=""font-size:26px;line-height:1;filter:drop-shadow(0 2px 4px rgba(0,0,0,.45))"">🏁</div>',iconSize:[30,30],iconAnchor:[4,28]}});
 L.marker([{fmt(delLat)},{fmt(delLng)}],{{icon:rIcon}}).addTo(map).bindPopup('<b>🏁 Delivery</b><br>{EscHtml(deliveryLabel)}');
 
-// Truck marker — live position
 var truckIcon = L.divIcon({{className:'',html:'<div style=""font-size:28px;line-height:1"">{vehicleEmoji}</div>',iconSize:[32,32],iconAnchor:[16,16]}});
 var truck = L.marker([{fmt(truckLat)},{fmt(truckLng)}],{{icon:truckIcon,zIndexOffset:1000}}).addTo(map)
              .bindPopup('<b>{vehicleEmoji} Driver</b><br>Live location');
 
-// Called from C# every 5 seconds via ExecuteScriptAsync
 function movePin(lat,lng,fuel){{
   truck.setLatLng([lat,lng]);
   map.panTo([lat,lng],{{animate:true,duration:0.8}});
@@ -900,7 +886,6 @@ function movePin(lat,lng,fuel){{
   if(el) el.textContent = 'Updated just now';
 }}
 
-// Called when order is delivered
 function showDelivered(){{
   var el = document.getElementById('liveStatus');
   if(el) {{ el.textContent='Delivered ✅'; el.style.color='#22c55e'; }}
@@ -923,27 +908,69 @@ function showDelivered(){{
             var card = Card(20, 56, 820, 460);
             pnlPlaceOrder.Controls.Add(card);
 
+            // ── Item Name ─────────────────────────────────────────
             card.Controls.Add(L("📦  Item Name", new Font("Segoe UI", 10f, FontStyle.Bold), TextDark, new Point(20, 18)));
             var txtItem = TxtBox(card, 20, 42, 360);
+
+            // ── Pick-up Point ─────────────────────────────────────
             card.Controls.Add(L("🟢  Pick-up Point", new Font("Segoe UI", 10f, FontStyle.Bold), TextDark, new Point(410, 18)));
             var txtPickup = TxtBox(card, 410, 42, 360);
+
+            // ── Weight ────────────────────────────────────────────
             card.Controls.Add(L("⚖  Weight (kg)", new Font("Segoe UI", 10f, FontStyle.Bold), TextDark, new Point(20, 102)));
             var txtWeight = TxtBox(card, 20, 126, 360);
+
+            // ── Delivery Point ────────────────────────────────────
             card.Controls.Add(L("🔴  Delivery Point", new Font("Segoe UI", 10f, FontStyle.Bold), TextDark, new Point(410, 102)));
             var txtDelivery = TxtBox(card, 410, 126, 360);
+
+            // ── Priority ──────────────────────────────────────────
             card.Controls.Add(L("⚡  Priority", new Font("Segoe UI", 10f, FontStyle.Bold), TextDark, new Point(20, 186)));
             var cmbP = new ComboBox { Location = new Point(20, 210), Size = new Size(360, 36), DropDownStyle = ComboBoxStyle.DropDownList, Font = new Font("Segoe UI", 11f), BackColor = CardBg, ForeColor = TextDark };
             cmbP.Items.AddRange(new object[] { "Normal", "Urgent" });
             cmbP.SelectedIndex = 0;
             card.Controls.Add(cmbP);
-            card.Controls.Add(L("💳  Payment Status", new Font("Segoe UI", 10f, FontStyle.Bold), TextDark, new Point(410, 186)));
-            var cmbPay = new ComboBox { Location = new Point(410, 210), Size = new Size(360, 36), DropDownStyle = ComboBoxStyle.DropDownList, Font = new Font("Segoe UI", 11f), BackColor = CardBg, ForeColor = TextDark };
-            cmbPay.Items.AddRange(new object[] { "Unpaid", "Paid", "Cash on Delivery" });
-            cmbPay.SelectedIndex = 0;
-            card.Controls.Add(cmbPay);
 
+            // ── Payment — amber note (replaces ComboBox) ──────────
+            // Only Cash on Delivery is accepted; no combo box needed.
+            var payNote = new Panel
+            {
+                Location = new Point(410, 186),
+                Size = new Size(360, 60),
+                BackColor = Color.FromArgb(255, 243, 205)   // soft amber
+            };
+            payNote.Paint += (s, e) =>
+            {
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                payNote.Region = new Region(RndPath(payNote.ClientRectangle, 8));
+            };
+            payNote.Controls.Add(new Label
+            {
+                Text = "💳  Payment Method",
+                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(133, 77, 14),
+                BackColor = Color.Transparent,
+                Location = new Point(10, 6),
+                AutoSize = true
+            });
+            payNote.Controls.Add(new Label
+            {
+                Text = "⚠  Only Cash on Delivery is available.",
+                Font = new Font("Segoe UI", 10f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(180, 83, 9),
+                BackColor = Color.Transparent,
+                Location = new Point(10, 28),
+                AutoSize = true
+            });
+            card.Controls.Add(payNote);
+
+            // Fixed payment value — always Cash on Delivery
+            const string fixedPaymentStatus = "Cash on Delivery";
+
+            // ── Info line ─────────────────────────────────────────
             card.Controls.Add(L($"ℹ  Order placed under account: {_customer.Username}  (ID: {_customer.UserID})", new Font("Segoe UI", 8.5f), TextGray, new Point(20, 264)));
 
+            // ── Fare estimate ─────────────────────────────────────
             var lblFare = new Label { Text = "", Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = RoyalBlue, BackColor = Color.Transparent, AutoSize = true, Location = new Point(20, 286) };
             card.Controls.Add(lblFare);
 
@@ -960,29 +987,96 @@ function showDelivered(){{
             txtWeight.TextChanged += recalc;
             cmbP.SelectedIndexChanged += recalc;
 
+            // ── Place Order button ────────────────────────────────
             var btnPlace = new Button { Text = "✅  Place Order", Location = new Point(20, 320), Size = new Size(180, 42), FlatStyle = FlatStyle.Flat, Font = new Font("Segoe UI", 11, FontStyle.Bold), BackColor = RoyalBlue, ForeColor = Color.White, Cursor = Cursors.Hand };
             btnPlace.FlatAppearance.BorderSize = 0;
             card.Controls.Add(btnPlace);
 
+            // ── Clear button ──────────────────────────────────────
             var btnClear = new Button { Text = "🗑  Clear", Location = new Point(214, 320), Size = new Size(120, 42), FlatStyle = FlatStyle.Flat, Font = new Font("Segoe UI", 10f, FontStyle.Bold), BackColor = CardBg, ForeColor = TextGray, Cursor = Cursors.Hand };
             btnClear.FlatAppearance.BorderSize = 1;
             btnClear.FlatAppearance.BorderColor = BorderBlue;
-            btnClear.Click += (s, e) => { txtItem.Text = txtWeight.Text = txtPickup.Text = txtDelivery.Text = ""; cmbP.SelectedIndex = cmbPay.SelectedIndex = 0; lblFare.Text = ""; };
+            btnClear.Click += (s, e) =>
+            {
+                txtItem.Text = txtWeight.Text = txtPickup.Text = txtDelivery.Text = "";
+                cmbP.SelectedIndex = 0;
+                lblFare.Text = "";
+            };
             card.Controls.Add(btnClear);
 
+            // ── Place Order click handler ─────────────────────────
             btnPlace.Click += (s, e) =>
             {
-                if (string.IsNullOrWhiteSpace(txtItem.Text) || string.IsNullOrWhiteSpace(txtWeight.Text) || string.IsNullOrWhiteSpace(txtPickup.Text) || string.IsNullOrWhiteSpace(txtDelivery.Text))
-                { MessageBox.Show("⚠️  Please fill in all fields.", "Incomplete", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-                if (!double.TryParse(txtWeight.Text.Trim(), out double weight) || weight <= 0)
-                { MessageBox.Show("⚠️  Please enter a valid weight.", "Invalid Weight", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+                // Basic field validation
+                if (string.IsNullOrWhiteSpace(txtItem.Text) ||
+                    string.IsNullOrWhiteSpace(txtWeight.Text) ||
+                    string.IsNullOrWhiteSpace(txtPickup.Text) ||
+                    string.IsNullOrWhiteSpace(txtDelivery.Text))
+                {
+                    MessageBox.Show("⚠️  Please fill in all fields.", "Incomplete", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
 
-                var newOrder = new Order { CustomerID = _customer.UserID, ItemName = txtItem.Text.Trim(), Weight = weight, PickupPoint = txtPickup.Text.Trim(), DeliveryPoint = txtDelivery.Text.Trim(), Priority = cmbP.SelectedItem?.ToString() ?? "Normal", PaymentStatus = cmbPay.SelectedItem?.ToString() ?? "Unpaid", OrderDate = DateTime.Now };
+                if (!double.TryParse(txtWeight.Text.Trim(), out double weight) || weight <= 0)
+                {
+                    MessageBox.Show("⚠️  Please enter a valid weight.", "Invalid Weight", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                // ── Prohibited item check ─────────────────────────
+                if (IsProhibitedItem(txtItem.Text.Trim().ToLower()))
+                {
+                    MessageBox.Show(
+                        "🚫  Order cannot be placed.\n\n" +
+                        "OptiRoute does not permit shipping of prohibited items,\n" +
+                        "including weapons, drugs, human remains, or any other\n" +
+                        "dangerous or illegal goods.\n\n" +
+                        "Please contact support if you believe this is an error.",
+                        "Order Rejected — Prohibited Item",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
+                    return;
+                }
+
+                var newOrder = new Order
+                {
+                    CustomerID = _customer.UserID,
+                    ItemName = txtItem.Text.Trim(),
+                    Weight = weight,
+                    PickupPoint = txtPickup.Text.Trim(),
+                    DeliveryPoint = txtDelivery.Text.Trim(),
+                    Priority = cmbP.SelectedItem?.ToString() ?? "Normal",
+                    PaymentStatus = fixedPaymentStatus,
+                    OrderDate = DateTime.Now
+                };
                 newOrder.CalculateFare();
+
                 int newID = _orderRepo.PlaceOrder(newOrder);
 
-                if (newID > 0) { MessageBox.Show($"✅  Order placed!\n\nOrder ID:  #{newID}\nTotal Fare:  {newOrder.FormattedFare}", "Order Placed", MessageBoxButtons.OK, MessageBoxIcon.Information); txtItem.Text = txtWeight.Text = txtPickup.Text = txtDelivery.Text = ""; cmbP.SelectedIndex = cmbPay.SelectedIndex = 0; lblFare.Text = ""; }
-                else MessageBox.Show("❌  Failed to place order. Please try again.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                if (newID > 0)
+                {
+                    MessageBox.Show(
+                        $"✅  Order placed!\n\nOrder ID:  #{newID}\nTotal Fare:  {newOrder.FormattedFare}",
+                        "Order Placed",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                    txtItem.Text = txtWeight.Text = txtPickup.Text = txtDelivery.Text = "";
+                    cmbP.SelectedIndex = 0;
+                    lblFare.Text = "";
+                }
+                else if (newID == -2)
+                {
+                    // Repository-level prohibited item block (safety net)
+                    MessageBox.Show(
+                        "🚫  Order blocked: prohibited item detected by the system.",
+                        "Order Rejected",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
+                }
+                else
+                {
+                    MessageBox.Show("❌  Failed to place order. Please try again.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
             };
         }
 
@@ -1116,6 +1210,48 @@ function showDelivered(){{
                 else { lblPwStatus.ForeColor = RedAlert; lblPwStatus.Text = "❌  " + error; }
             };
             pwCard.Controls.Add(btnUpdatePw);
+        }
+
+        // ═════════════════════════════════════════════════════════
+        //  PROHIBITED ITEM CHECK
+        //  Returns true if the item name contains any keyword from
+        //  the banned-goods list. Called in UI before PlaceOrder()
+        //  and mirrored in OrderRepository as a backend safety net.
+        // ═════════════════════════════════════════════════════════
+        private static bool IsProhibitedItem(string itemNameLower)
+        {
+            string[] prohibitedKeywords =
+            {
+                // Human remains
+                "dead body", "deadbody", "corpse", "human remains",
+                "body parts", "body part", "cadaver", "remains", "deceased",
+                "human organ", "organs",
+
+                // Weapons & firearms
+                "weapon", "weapons", "gun", "guns", "pistol", "rifle",
+                "shotgun", "firearm", "firearms", "explosive", "explosives",
+                "bomb", "grenade", "grenades", "ammunition", "ammo",
+                "bullet", "bullets", "knife blade", "sword", "landmine",
+                "rocket launcher", "missile",
+
+                // Drugs & narcotics
+                "drug", "drugs", "narcotic", "narcotics", "cocaine",
+                "heroin", "meth", "methamphetamine", "cannabis",
+                "marijuana", "fentanyl", "opium", "crack", "lsd",
+                "ecstasy", "mdma", "ketamine",
+
+                // Other dangerous / illegal
+                "poison", "poisonous", "toxic chemical", "toxic chemicals",
+                "biological weapon", "bioweapon", "chemical weapon",
+                "radioactive", "nuclear material", "human trafficking",
+                "smuggled", "illegal goods"
+            };
+
+            foreach (string keyword in prohibitedKeywords)
+                if (itemNameLower.Contains(keyword))
+                    return true;
+
+            return false;
         }
 
         // ═════════════════════════════════════════════════════════
