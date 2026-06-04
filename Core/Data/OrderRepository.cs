@@ -70,17 +70,12 @@ namespace OptiRoute.Core.Data
                 using var conn = new SqlConnection(_cs);
                 conn.Open();
                 var cmd = new SqlCommand(
-                    @"SELECT o.OrderID, o.CustomerID,
-                             v.DriverID,
-                             ISNULL(o.VehicleID, 0) AS VehicleID,
-                             o.ItemName, o.Weight, o.Priority,
-                             o.PickupPoint, o.DeliveryPoint, o.OrderStatus,
-                             o.TotalFare, o.PaymentStatus,
-                             ISNULL(o.Rating, 0) AS Rating, o.OrderDate
-                      FROM   Table_Orders o
-                      LEFT   JOIN Table_Vehicles v ON v.VehicleID = o.VehicleID
-                      WHERE  o.CustomerID = @cid
-                      ORDER  BY o.OrderDate DESC", conn);
+            @"SELECT OrderID, CustomerID, DriverID, VehicleID,
+                     ItemName, Weight, Priority, PickupPoint, DeliveryPoint,
+                     OrderStatus, TotalFare, PaymentStatus, Rating, OrderDate
+              FROM   vw_OrderFull
+              WHERE  CustomerID = @cid
+              ORDER  BY OrderDate DESC", conn);
                 cmd.Parameters.AddWithValue("@cid", customerID);
 
                 using var r = cmd.ExecuteReader();
@@ -99,18 +94,13 @@ namespace OptiRoute.Core.Data
                 using var conn = new SqlConnection(_cs);
                 conn.Open();
                 var cmd = new SqlCommand(
-                    $@"SELECT TOP {top}
-                              o.OrderID, o.CustomerID,
-                              v.DriverID,
-                              ISNULL(o.VehicleID, 0) AS VehicleID,
-                              o.ItemName, o.Weight, o.Priority,
-                              o.PickupPoint, o.DeliveryPoint, o.OrderStatus,
-                              o.TotalFare, o.PaymentStatus,
-                              ISNULL(o.Rating, 0) AS Rating, o.OrderDate
-                       FROM   Table_Orders o
-                       LEFT   JOIN Table_Vehicles v ON v.VehicleID = o.VehicleID
-                       WHERE  o.CustomerID = @cid
-                       ORDER  BY o.OrderDate DESC", conn);
+            $@"SELECT TOP {top}
+                      OrderID, CustomerID, DriverID, VehicleID,
+                      ItemName, Weight, Priority, PickupPoint, DeliveryPoint,
+                      OrderStatus, TotalFare, PaymentStatus, Rating, OrderDate
+               FROM   vw_OrderFull
+               WHERE  CustomerID = @cid
+               ORDER  BY OrderDate DESC", conn);
                 cmd.Parameters.AddWithValue("@cid", customerID);
 
                 using var r = cmd.ExecuteReader();
@@ -434,16 +424,12 @@ namespace OptiRoute.Core.Data
                 using var conn = new SqlConnection(_cs);
                 conn.Open();
                 var cmd = new SqlCommand(
-                    @"SELECT o.OrderID, o.CustomerID,
-                             NULL AS DriverID,
-                             ISNULL(o.VehicleID, 0) AS VehicleID,
-                             o.ItemName, o.Weight, o.Priority,
-                             o.PickupPoint, o.DeliveryPoint, o.OrderStatus,
-                             o.TotalFare, o.PaymentStatus,
-                             ISNULL(o.Rating, 0) AS Rating, o.OrderDate
-                      FROM   Table_Orders o
-                      WHERE  o.OrderStatus = 'Pending'
-                      ORDER  BY o.Priority DESC, o.OrderDate ASC", conn);
+            @"SELECT OrderID, CustomerID, DriverID, VehicleID,
+                     ItemName, Weight, Priority, PickupPoint, DeliveryPoint,
+                     OrderStatus, TotalFare, PaymentStatus, Rating, OrderDate
+              FROM   vw_OrderFull
+              WHERE  OrderStatus = 'Pending'
+              ORDER  BY Priority DESC, OrderDate ASC", conn);
 
                 using var r = cmd.ExecuteReader();
                 while (r.Read()) list.Add(MapOrder(r));
@@ -514,21 +500,18 @@ namespace OptiRoute.Core.Data
             {
                 using var conn = new SqlConnection(_cs);
                 conn.Open();
+                // Uses vw_RevenueSummary — aggregation defined once in SQL
                 var cmd = new SqlCommand(
-                    @"SELECT ISNULL(SUM(TotalFare), 0)                                              AS Revenue,
-                             COUNT(*)                                                                AS Total,
-                             SUM(CASE WHEN PaymentStatus = 'Paid'             THEN 1 ELSE 0 END)   AS Paid,
-                             SUM(CASE WHEN PaymentStatus = 'Cash on Delivery' THEN 1 ELSE 0 END)   AS COD
-                      FROM   Table_Orders
-                      WHERE  OrderStatus = 'Delivered'", conn);
+                    "SELECT TotalRevenue, TotalOrders, PaidOrders, CodOrders FROM vw_RevenueSummary",
+                    conn);
 
                 using var r = cmd.ExecuteReader();
                 if (r.Read())
                     return (
-                        r["Revenue"] != DBNull.Value ? Convert.ToDecimal(r["Revenue"]) : 0m,
-                        r["Total"] != DBNull.Value ? Convert.ToInt32(r["Total"]) : 0,
-                        r["Paid"] != DBNull.Value ? Convert.ToInt32(r["Paid"]) : 0,
-                        r["COD"] != DBNull.Value ? Convert.ToInt32(r["COD"]) : 0
+                        r["TotalRevenue"] != DBNull.Value ? Convert.ToDecimal(r["TotalRevenue"]) : 0m,
+                        r["TotalOrders"] != DBNull.Value ? Convert.ToInt32(r["TotalOrders"]) : 0,
+                        r["PaidOrders"] != DBNull.Value ? Convert.ToInt32(r["PaidOrders"]) : 0,
+                        r["CodOrders"] != DBNull.Value ? Convert.ToInt32(r["CodOrders"]) : 0
                     );
             }
             catch { }

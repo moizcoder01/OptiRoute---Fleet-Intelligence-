@@ -55,31 +55,11 @@ namespace OptiRoute.Core.Data
         // ═════════════════════════════════════════════════════════
         public Driver? LoadDriver(string username)
         {
+            // Uses vw_DriverDetails view — JOIN is defined once in SQL
             const string sql = @"
-                SELECT
-                    u.UserID,
-                    u.FirstName,
-                    u.LastName,
-                    u.Email,
-                    u.Phone,
-                    u.Username,
-                    u.UserRole,
-                    d.Rating                                    AS DriverRating,
-                    d.LicenseNumber,
-                    v.VehicleID,
-                    ISNULL(v.PlateNumber,               'N/A')   AS PlateNumber,
-                    ISNULL(v.VehicleType,               'Bike')  AS VehicleType,
-                    ISNULL(v.CurrentFuel,               100.0)   AS CurrentFuel,
-                    ISNULL(v.IsAvailable,               1)       AS IsAvailable,
-                    ISNULL(v.NeedsMaintenance,          0)       AS NeedsMaintenance,
-                    ISNULL(v.TotalDistanceCovered,      0.0)     AS TotalDistanceCovered,
-                    ISNULL(v.DistanceSinceLastService,  0.0)     AS DistanceSinceLastService,
-                    ISNULL(v.MaintenanceIntervalKm,  5000.0)     AS MaintenanceIntervalKm
-                FROM  Table_Users    u
-                INNER JOIN Table_Drivers  d ON d.DriverID = u.UserID
-                LEFT  JOIN Table_Vehicles v ON v.DriverID = d.DriverID
-                WHERE u.Username = @Username
-                  AND u.UserRole = 'Driver'";
+                SELECT *
+                FROM  vw_DriverDetails
+                WHERE Username = @Username";
 
             using var con = GetConnection();
             using var cmd = new SqlCommand(sql, con);
@@ -96,16 +76,11 @@ namespace OptiRoute.Core.Data
         // ═════════════════════════════════════════════════════════
         public DriverStats GetDriverStats(int driverId)
         {
+            // Uses vw_DriverStats view
             const string sql = @"
-                SELECT
-                    SUM(CASE WHEN o.OrderStatus = 'Assigned'  THEN 1 ELSE 0 END) AS Assigned,
-                    SUM(CASE WHEN o.OrderStatus = 'Delivered' THEN 1 ELSE 0 END) AS Delivered,
-                    SUM(CASE WHEN o.OrderStatus = 'Picked'    THEN 1 ELSE 0 END) AS Pending,
-                    SUM(CASE WHEN o.OrderStatus = 'Returned'  THEN 1 ELSE 0 END) AS Returned,
-                    COUNT(CASE WHEN o.Rating > 0              THEN 1 END)         AS TotalRatings
-                FROM  Table_Orders   o
-                INNER JOIN Table_Vehicles v ON v.VehicleID = o.VehicleID
-                WHERE v.DriverID = @DriverID";
+                SELECT Assigned, Delivered, Pending, Returned, TotalRatings
+                FROM  vw_DriverStats
+                WHERE DriverID = @DriverID";
 
             using var con = GetConnection();
             using var cmd = new SqlCommand(sql, con);
@@ -123,6 +98,24 @@ namespace OptiRoute.Core.Data
                 Returned = Val(rdr, "Returned"),
                 TotalRatings = Val(rdr, "TotalRatings")
             };
+        }
+        public double GetLiveAverageRating(int driverId)
+        {
+            const string sql = @"
+        SELECT AVG(CAST(o.Rating AS FLOAT))
+        FROM   Table_Orders   o
+        INNER  JOIN Table_Vehicles v ON v.VehicleID = o.VehicleID
+        WHERE  v.DriverID  = @DriverID
+          AND  o.Rating IS NOT NULL
+          AND  o.Rating > 0";
+
+            using var con = GetConnection();
+            using var cmd = new SqlCommand(sql, con);
+            cmd.Parameters.AddWithValue("@DriverID", driverId);
+            con.Open();
+            object res = cmd.ExecuteScalar();
+            if (res == null || res == DBNull.Value) return 5.0;
+            return Math.Round(Convert.ToDouble(res), 1);
         }
 
         // ═════════════════════════════════════════════════════════
@@ -232,87 +225,29 @@ namespace OptiRoute.Core.Data
         //    4. If DistanceSinceLastService >= MaintenanceIntervalKm,
         //       sets NeedsMaintenance = 1 automatically.
         // ═════════════════════════════════════════════════════════
-        public bool UpdateOrderStatus(int orderId, int driverId, string newStatus)
+        public bool UpdateOrderStatus(int orderId, int driverId, string newStatus) 
         {
+            // The trigger trg_OrderStatus_AfterUpdate handles:
+            //   - archiving to Table_OrderHistory on Delivered
+            //   - setting IsAvailable on vehicle
+            //   - incrementing distance columns
+            //   - auto-flagging NeedsMaintenance
+            // This method only needs to SET the status.
+            const string sql = @"
+                UPDATE o
+                SET    o.OrderStatus = @Status
+                FROM   Table_Orders   o
+                INNER JOIN Table_Vehicles v ON v.VehicleID = o.VehicleID
+                WHERE  o.OrderID  = @OrderID
+                  AND  v.DriverID = @DriverID";
+
             using var con = GetConnection();
+            using var cmd = new SqlCommand(sql, con);
+            cmd.Parameters.AddWithValue("@Status", newStatus);
+            cmd.Parameters.AddWithValue("@OrderID", orderId);
+            cmd.Parameters.AddWithValue("@DriverID", driverId);
             con.Open();
-            using var txn = con.BeginTransaction();
-
-            try
-            {
-                // 1. Update the order status
-                const string updateSql = @"
-                    UPDATE o
-                    SET    o.OrderStatus = @Status
-                    FROM   Table_Orders   o
-                    INNER JOIN Table_Vehicles v ON v.VehicleID = o.VehicleID
-                    WHERE  o.OrderID  = @OrderID
-                      AND  v.DriverID = @DriverID";
-
-                using var updateCmd = new SqlCommand(updateSql, con, txn);
-                updateCmd.Parameters.AddWithValue("@Status", newStatus);
-                updateCmd.Parameters.AddWithValue("@OrderID", orderId);
-                updateCmd.Parameters.AddWithValue("@DriverID", driverId);
-
-                int rows = updateCmd.ExecuteNonQuery();
-                if (rows == 0) { txn.Rollback(); return false; }
-
-                if (newStatus == "Delivered")
-                {
-                    // 2. Archive to Table_OrderHistory
-                    const string historySql = @"
-                        INSERT INTO Table_OrderHistory
-                            (OrderID, CustomerID, ItemName, Weight, Priority,
-                             PickupPoint, DeliveryPoint, TotalFare, PaymentStatus,
-                             OrderDate, DeliveredDate, Rating)
-                        SELECT
-                            o.OrderID, o.CustomerID, o.ItemName, o.Weight, o.Priority,
-                            o.PickupPoint, o.DeliveryPoint, o.TotalFare, o.PaymentStatus,
-                            o.OrderDate, GETDATE(), o.Rating
-                        FROM  Table_Orders   o
-                        INNER JOIN Table_Vehicles v ON v.VehicleID = o.VehicleID
-                        WHERE  o.OrderID  = @OrderID
-                          AND  v.DriverID = @DriverID";
-
-                    using var histCmd = new SqlCommand(historySql, con, txn);
-                    histCmd.Parameters.AddWithValue("@OrderID", orderId);
-                    histCmd.Parameters.AddWithValue("@DriverID", driverId);
-                    histCmd.ExecuteNonQuery();
-
-                    // 3. Free vehicle + increment distance + auto-flag maintenance
-                    //    RouteDistance is read from Table_Orders; ISNULL(.,0) handles
-                    //    orders that were assigned without OSRM data.
-                    const string vehicleSql = @"
-                        UPDATE v
-                        SET    v.IsAvailable              = 1,
-                               v.TotalDistanceCovered     = v.TotalDistanceCovered
-                                                           + ISNULL(o.RouteDistance, 0),
-                               v.DistanceSinceLastService = v.DistanceSinceLastService
-                                                           + ISNULL(o.RouteDistance, 0),
-                               v.NeedsMaintenance         = CASE
-                                   WHEN (v.DistanceSinceLastService + ISNULL(o.RouteDistance, 0))
-                                        >= v.MaintenanceIntervalKm
-                                   THEN 1
-                                   ELSE v.NeedsMaintenance
-                               END
-                        FROM   Table_Vehicles v
-                        INNER JOIN Table_Orders o ON o.OrderID = @OrderID
-                        WHERE  v.DriverID = @DriverID";
-
-                    using var vehCmd = new SqlCommand(vehicleSql, con, txn);
-                    vehCmd.Parameters.AddWithValue("@OrderID", orderId);
-                    vehCmd.Parameters.AddWithValue("@DriverID", driverId);
-                    vehCmd.ExecuteNonQuery();
-                }
-
-                txn.Commit();
-                return true;
-            }
-            catch
-            {
-                txn.Rollback();
-                throw;
-            }
+            return cmd.ExecuteNonQuery() > 0;
         }
 
         // ═════════════════════════════════════════════════════════
@@ -325,6 +260,7 @@ namespace OptiRoute.Core.Data
         // ═════════════════════════════════════════════════════════
         public bool UpdateDistanceAndFuel(int driverId, double kmCovered, double fuelBurned)
         {
+            // NeedsMaintenance is now handled by trg_Vehicle_MaintenanceAutoFlag
             const string sql = @"
                 UPDATE Table_Vehicles
                 SET    CurrentFuel              = CASE
@@ -332,13 +268,7 @@ namespace OptiRoute.Core.Data
                                                     ELSE CurrentFuel - @Fuel
                                                   END,
                        TotalDistanceCovered     = TotalDistanceCovered    + @Km,
-                       DistanceSinceLastService = DistanceSinceLastService + @Km,
-                       NeedsMaintenance         = CASE
-                                                    WHEN (DistanceSinceLastService + @Km)
-                                                         >= MaintenanceIntervalKm
-                                                    THEN 1
-                                                    ELSE NeedsMaintenance
-                                                  END
+                       DistanceSinceLastService = DistanceSinceLastService + @Km
                 WHERE  DriverID = @DriverID";
 
             using var con = GetConnection();
@@ -445,6 +375,7 @@ namespace OptiRoute.Core.Data
             con.Open();
             return cmd.ExecuteNonQuery() > 0;
         }
+
 
         // ═════════════════════════════════════════════════════════
         //  PRIVATE HELPERS

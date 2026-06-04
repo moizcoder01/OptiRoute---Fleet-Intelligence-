@@ -119,11 +119,15 @@ namespace OptiRoute.Core.Data
             {
                 using var conn = new SqlConnection(_cs);
                 conn.Open();
+                // Uses vw_TelemetrySummary — aggregation defined once in SQL
                 var cmd = new SqlCommand(
-                    "SELECT ISNULL(SUM(FuelBurned), 0) FROM Table_Telemetry WHERE OrderID = @oid",
-                    conn);
+                    @"SELECT ISNULL(TotalFuelBurned, 0)
+                      FROM   vw_TelemetrySummary
+                      WHERE  OrderID = @oid", conn);
                 cmd.Parameters.AddWithValue("@oid", orderID);
-                return Convert.ToDouble(cmd.ExecuteScalar());
+                var result = cmd.ExecuteScalar();
+                return result != null && result != DBNull.Value
+                    ? Convert.ToDouble(result) : 0;
             }
             catch { return 0; }
         }

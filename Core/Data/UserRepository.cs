@@ -216,28 +216,16 @@ namespace OptiRoute.Core.Data
             {
                 using var conn = new SqlConnection(_cs);
                 conn.Open();
+                // Uses vw_DriverDetails — same JOIN already defined in SQL
                 var cmd = new SqlCommand(
-                    @"SELECT
-                        u.UserID,
-                        u.FirstName,
-                        u.LastName,
-                        u.Email,
-                        u.Phone,
-                        u.Username,
-                        u.UserRole,
-                        d.Rating          AS DriverRating,
-                        d.LicenseNumber,
-                        v.VehicleID,
-                        ISNULL(v.PlateNumber,      'N/A')  AS PlateNumber,
-                        ISNULL(v.VehicleType,      'Bike') AS VehicleType,
-                        ISNULL(v.CurrentFuel,      100.0)  AS CurrentFuel,
-                        ISNULL(v.IsAvailable,      1)      AS IsAvailable,
-                        ISNULL(v.NeedsMaintenance, 0)      AS NeedsMaintenance
-                      FROM  Table_Users    u
-                      INNER JOIN Table_Drivers  d ON d.DriverID = u.UserID
-                      LEFT  JOIN Table_Vehicles v ON v.DriverID = d.DriverID
-                      WHERE u.UserRole = 'Driver'
-                      ORDER BY u.FirstName", conn);
+                    @"SELECT UserID, FirstName, LastName, Email, Phone,
+                             Username, UserRole, DriverRating, LicenseNumber,
+                             VehicleID, PlateNumber, VehicleType, CurrentFuel,
+                             IsAvailable, NeedsMaintenance,
+                             TotalDistanceCovered, DistanceSinceLastService,
+                             MaintenanceIntervalKm
+                      FROM   vw_DriverDetails
+                      ORDER BY FirstName", conn);
 
                 using var r = cmd.ExecuteReader();
                 while (r.Read()) list.Add(MapDriver(r));
@@ -373,14 +361,17 @@ namespace OptiRoute.Core.Data
             {
                 using var conn = new SqlConnection(_cs);
                 conn.Open();
+                // Uses vw_DriverAverageRating — aggregation defined once in SQL.
+                // NOTE: trg_Rating_AfterUpdate fires automatically on SaveRating(),
+                //       so this method is only needed for manual recalculation.
                 var cmd = new SqlCommand(
                     @"UPDATE Table_Drivers
-                      SET Rating = (
-                          SELECT AVG(CAST(o.Rating AS FLOAT))
-                          FROM   Table_Orders   o
-                          INNER JOIN Table_Vehicles v ON v.VehicleID = o.VehicleID
-                          WHERE  v.DriverID = @id AND o.Rating > 0)
-                      WHERE DriverID = @id", conn);
+                      SET    Rating = ISNULL(
+                                 (SELECT AverageRating
+                                  FROM   vw_DriverAverageRating
+                                  WHERE  DriverID = @id),
+                                 Rating)
+                      WHERE  DriverID = @id", conn);
                 cmd.Parameters.AddWithValue("@id", driverID);
                 cmd.ExecuteNonQuery();
                 return true;
@@ -413,15 +404,36 @@ namespace OptiRoute.Core.Data
                 LastName = r["LastName"]?.ToString() ?? "",
                 Email = r["Email"]?.ToString() ?? "",
                 Phone = r["Phone"]?.ToString() ?? "",
-                LicenseNumber = r["LicenseNumber"] != DBNull.Value ? r["LicenseNumber"].ToString()! : "",
-                VehicleID = r["VehicleID"] != DBNull.Value ? Convert.ToInt32(r["VehicleID"]) : 0,
+                LicenseNumber = r["LicenseNumber"] != DBNull.Value
+                                       ? r["LicenseNumber"].ToString()! : "",
+                VehicleID = r["VehicleID"] != DBNull.Value
+                                       ? Convert.ToInt32(r["VehicleID"]) : 0,
                 PlateNumber = r["PlateNumber"]?.ToString() ?? "N/A",
                 VehicleType = r["VehicleType"]?.ToString() ?? "Bike",
-                CurrentFuel = r["CurrentFuel"] != DBNull.Value ? Convert.ToDouble(r["CurrentFuel"]) : 100.0,
-                IsAvailable = r["IsAvailable"] != DBNull.Value && Convert.ToBoolean(r["IsAvailable"]),
-                NeedsMaintenance = r["NeedsMaintenance"] != DBNull.Value && Convert.ToBoolean(r["NeedsMaintenance"]),
-                AverageRating = r["DriverRating"] != DBNull.Value ? Convert.ToDouble(r["DriverRating"]) : 5.0
+                CurrentFuel = r["CurrentFuel"] != DBNull.Value
+                                       ? Convert.ToDouble(r["CurrentFuel"]) : 100.0,
+                IsAvailable = r["IsAvailable"] != DBNull.Value
+                                       && Convert.ToBoolean(r["IsAvailable"]),
+                NeedsMaintenance = r["NeedsMaintenance"] != DBNull.Value
+                                       && Convert.ToBoolean(r["NeedsMaintenance"]),
+                AverageRating = r["DriverRating"] != DBNull.Value
+                                       ? Convert.ToDouble(r["DriverRating"]) : 5.0,
+                // New distance/maintenance columns — safe fallback if column absent
+                TotalDistanceCovered = SafeDouble(r, "TotalDistanceCovered", 0.0),
+                DistanceSinceLastService = SafeDouble(r, "DistanceSinceLastService", 0.0),
+                MaintenanceIntervalKm = SafeDouble(r, "MaintenanceIntervalKm", 5000.0)
             };
+        }
+
+        // Safe column reader — returns fallback if column missing or DBNull
+        private static double SafeDouble(SqlDataReader r, string col, double fallback)
+        {
+            try
+            {
+                int ord = r.GetOrdinal(col);
+                return r.IsDBNull(ord) ? fallback : r.GetDouble(ord);
+            }
+            catch { return fallback; }
         }
     }
 }

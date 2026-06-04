@@ -249,7 +249,7 @@ namespace OptiRoute.Forms
 
             btnDashboard = SideBtn("🏠   Dashboard", 234);
             btnOrders = SideBtn("📋   All Orders", 281);
-            btnAssign = SideBtn("🔗   Assign & Route", 328);
+            btnAssign = SideBtn("🔗   Assign Route", 328);
             btnDrivers = SideBtn("🚗   Drivers", 375);
             btnReports = SideBtn("📊   Reports", 422);
             btnProfile = SideBtn("👤   My Profile", 469);
